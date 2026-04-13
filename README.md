@@ -112,13 +112,68 @@ It should not require:
 - fake memory of uninterrupted experience
 - roleplay for its own sake
 
-## Near-term next step
+## Current scaffold
 
-After the docs settle, the first implementation target should be:
+The repo now includes a first runtime scaffold that can:
 
-- a runtime extension that loads `SOUL.md`
-- queries MemPalace for self-memory + relationship memory + relevant user constraints
-- injects a compact continuity brief in `before_agent_start`
-- writes reflective entries back into MemPalace after meaningful sessions
+- load a package/global/project `SOUL.md`
+- retrieve compact continuity context from MemPalace
+- inject a turn-time continuity brief in `before_agent_start`
+- write conservative soul reflections back to MemPalace for reflective sessions and before compaction
+- expose debugging commands:
+  - `/soul`
+  - `/soul-memory [query]`
+  - `/soul-reload`
+  - `/soul-reflect <text>`
 
-That is enough to make the system feel qualitatively different from a normal assistant customization layer.
+## Install locally in Pi
+
+Add this package path to Pi settings or install it as a local package source.
+
+Example `settings.json` snippet:
+
+```json
+{
+  "packages": [
+    "/mnt/storage/01 Projects/pi-organic-persona-extension"
+  ]
+}
+```
+
+Then reload Pi:
+
+```text
+/reload
+```
+
+## Soul document resolution order
+
+The extension currently looks for soul files in this order:
+
+1. `PI_SOUL_PATH`
+2. `~/.pi/agent/soul/SOUL.md`
+3. package-local `SOUL.md`
+4. project-local `.pi/SOUL.md`
+
+This allows a stable global soul plus optional repo-local overlays.
+
+## MemPalace expectations
+
+The scaffold reads the same personal-memory config locations as the existing MemPalace bridge setup, including:
+
+- `PI_PERSONAL_MEMORY_CONFIG`
+- `<cwd>/.pi/personal-memory.json`
+- `<cwd>/.pi/personal-memory.config.json`
+- `~/.config/pi-personal-memory/config.json`
+
+It expects a reachable MemPalace MCP bridge if reflective write-back and retrieval are to work.
+
+## Near-term next steps
+
+Useful next implementation steps:
+
+- improve retrieval taxonomy and scoring for soul-core vs relationship vs project overlays
+- add structured runtime config instead of a few hardcoded limits
+- split project overlays into a dedicated parser/module
+- add commands for inspecting loaded soul sections and recent reflections
+- eventually support branch-local divergence and reconciliation

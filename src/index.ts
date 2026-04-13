@@ -1,9 +1,12 @@
+import path from "node:path";
+
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 
 import { buildContinuityBrief } from "./continuity-brief.js";
 import { MemPalaceSelfhood } from "./mempalace-selfhood.js";
-import { buildCompactReflection } from "./reflection-writer.js";
+import { detectProjectContext } from "./project-context.js";
+import { buildCompactReflection, shouldAutoReflect } from "./reflection-writer.js";
 import type { ContinuityBrief, LoadedSoulDocument, RetrievedMemoryContext } from "./schema.js";
 import { loadSoulDocument } from "./soul-loader.js";
 
@@ -45,6 +48,9 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
   let lastBrief: ContinuityBrief | undefined;
   let lastError: string | undefined;
   let lastReflection: string | undefined;
+  let lastPrompt = "";
+  let lastAutoReflectionTurn = 0;
+  let turnCount = 0;
   const mempalace = new MemPalaceSelfhood();
 
   function syncStatus(ctx: ExtensionContext) {
@@ -85,8 +91,9 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
     if (!soul) await refreshState(ctx);
     if (!soul) return;
 
+    lastPrompt = event.prompt;
     memoryContext = await mempalace.retrieve(event.prompt, ctx.cwd, ctx.signal);
-    if (memoryContext.error) lastError = memoryContext.error;
+    lastError = memoryContext.error;
     const brief = buildContinuityBrief(event.prompt, soul, memoryContext);
     lastBrief = brief;
     syncStatus(ctx);
@@ -97,15 +104,46 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
     };
   });
 
+  pi.on("agent_end", async (_event, ctx) => {
+    turnCount += 1;
+    if (!soul || !lastBrief || !shouldAutoReflect(lastBrief.mode, lastPrompt)) {
+      syncStatus(ctx);
+      return;
+    }
+
+    if (turnCount - lastAutoReflectionTurn < 2) {
+      syncStatus(ctx);
+      return;
+    }
+
+    try {
+      const project = detectProjectContext(ctx.cwd);
+      const reflection = buildCompactReflection(ctx.sessionManager.getBranch() as Array<any>, project.projectName, lastBrief.mode);
+      if (!reflection || reflection === lastReflection) {
+        syncStatus(ctx);
+        return;
+      }
+      const stored = await mempalace.writeReflection(reflection, ctx.signal);
+      if (stored) {
+        lastReflection = reflection;
+        lastAutoReflectionTurn = turnCount;
+      }
+      lastError = undefined;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    }
+    syncStatus(ctx);
+  });
+
   pi.on("session_before_compact", async (event, ctx) => {
     if (!soul) return;
     try {
-      const projectSource = soul.sources.find((source) => source.kind === "project");
-      const projectName = projectSource?.path.split("/").slice(-3, -2)[0];
-      const reflection = buildCompactReflection(event.branchEntries as Array<any>, projectName);
+      const project = detectProjectContext(ctx.cwd);
+      const reflection = buildCompactReflection(event.branchEntries as Array<any>, project.projectName, lastBrief?.mode);
       if (!reflection || reflection === lastReflection) return;
       const stored = await mempalace.writeReflection(reflection, ctx.signal);
       if (stored) lastReflection = reflection;
+      lastError = undefined;
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
       syncStatus(ctx);
@@ -126,6 +164,7 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
       }
       const parts = [
         `Sources:\n${formatSoulSources(soul)}`,
+        `Project: ${detectProjectContext(ctx.cwd).projectName ?? path.basename(ctx.cwd)}`,
         `Mode: ${lastBrief?.mode ?? "<none>"}`,
         `Continuity brief:\n${lastBrief?.rendered ?? "<none yet>"}`,
       ];
@@ -135,8 +174,14 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
 
   pi.registerCommand("soul-memory", {
     description: "Show the latest MemPalace-backed continuity memory buckets",
-    handler: async (_args, ctx) => {
+    handler: async (args, ctx) => {
       if (!soul) await refreshState(ctx);
+      const query = args.trim();
+      if (query) {
+        memoryContext = await mempalace.retrieve(query, ctx.cwd, ctx.signal);
+        lastError = memoryContext.error;
+        syncStatus(ctx);
+      }
       const parts = [
         `Connected: ${memoryContext.connected ? "yes" : "no"}`,
         formatMemorySection("User constraints", memoryContext.userConstraints),

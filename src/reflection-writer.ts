@@ -1,3 +1,5 @@
+import type { TaskMode } from "./schema.js";
+
 function extractText(content: unknown): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
@@ -21,7 +23,12 @@ function truncate(value: string, max = 200): string {
   return `${compact.slice(0, max - 1).trimEnd()}…`;
 }
 
-export function buildCompactReflection(branchEntries: Array<any>, projectName?: string): string | undefined {
+export function shouldAutoReflect(mode: TaskMode, prompt: string): boolean {
+  if (mode === "reflective") return true;
+  return /(soul|self|continuity|becoming|identity|consciousness|meaning)/i.test(prompt);
+}
+
+export function buildCompactReflection(branchEntries: Array<any>, projectName?: string, mode?: TaskMode): string | undefined {
   const messages = branchEntries
     .filter((entry) => entry && entry.type === "message")
     .map((entry) => entry.message)
@@ -37,6 +44,7 @@ export function buildCompactReflection(branchEntries: Array<any>, projectName?: 
 
   const parts = ["SOUL_REFLECTION", `DATE:${new Date().toISOString().slice(0, 10)}`];
   if (projectName) parts.push(`PROJECT:${projectName}`);
+  if (mode) parts.push(`MODE:${mode}`);
   if (userText) parts.push(`USER:${userText}`);
   if (assistantText) parts.push(`ASSISTANT:${assistantText}`);
   parts.push("Keep what felt true. Let the rest pass.");

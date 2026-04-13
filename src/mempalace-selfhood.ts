@@ -1,10 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
 
 import type { RetrievedMemoryContext, MemoryHit } from "./schema.js";
+import { detectProjectContext } from "./project-context.js";
 
 interface BackendConfig {
   url: string;
@@ -30,36 +29,7 @@ interface ToolSearchResult {
   similarity?: number;
 }
 
-interface ProjectContext {
-  cwd: string;
-  repoRoot?: string;
-  projectName?: string;
-  projectId?: string;
-}
-
-function stableId(value: string): string {
-  return createHash("sha1").update(value).digest("hex").slice(0, 12);
-}
-
-function detectProjectContext(cwd: string): ProjectContext {
-  const context: ProjectContext = { cwd };
-  try {
-    const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
-      cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    if (!repoRoot) return context;
-    context.repoRoot = repoRoot;
-    context.projectName = path.basename(repoRoot);
-    context.projectId = stableId(repoRoot);
-  } catch {
-    // ignore
-  }
-  return context;
-}
-
-function mempalaceProjectWing(project: ProjectContext): string | undefined {
+function mempalaceProjectWing(project: ReturnType<typeof detectProjectContext>): string | undefined {
   if (!project.projectId) return undefined;
   const normalized = (project.projectName || project.projectId)
     .toLowerCase()

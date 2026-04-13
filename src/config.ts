@@ -5,6 +5,12 @@ import { fileURLToPath } from "node:url";
 
 import type { RuntimeConfig } from "./schema.js";
 
+export interface RuntimeConfigSourceInfo {
+  kind: "package" | "global" | "project";
+  path: string;
+  exists: boolean;
+}
+
 const DEFAULT_CONFIG: RuntimeConfig = {
   version: 1,
   runtime: {
@@ -64,11 +70,21 @@ function merge(base: RuntimeConfig, value: Record<string, any> | undefined): Run
   };
 }
 
-export function loadRuntimeConfig(cwd: string, importMetaUrl: string): RuntimeConfig {
+export function getRuntimeConfigSources(cwd: string, importMetaUrl: string): RuntimeConfigSourceInfo[] {
   const home = os.homedir();
   const root = packageRoot(importMetaUrl);
-  const packageConfig = readJson(path.join(root, "defaults.json"));
-  const globalConfig = readJson(path.join(home, ".pi", "agent", "soul", "defaults.json"));
-  const projectConfig = readJson(path.join(cwd, ".pi", "soul.json"));
+  const sources: RuntimeConfigSourceInfo[] = [
+    { kind: "package", path: path.join(root, "defaults.json"), exists: false },
+    { kind: "global", path: path.join(home, ".pi", "agent", "soul", "defaults.json"), exists: false },
+    { kind: "project", path: path.join(cwd, ".pi", "soul.json"), exists: false },
+  ];
+  return sources.map((source) => ({ ...source, exists: fs.existsSync(source.path) }));
+}
+
+export function loadRuntimeConfig(cwd: string, importMetaUrl: string): RuntimeConfig {
+  const sources = getRuntimeConfigSources(cwd, importMetaUrl);
+  const packageConfig = readJson(sources.find((source) => source.kind === "package")?.path);
+  const globalConfig = readJson(sources.find((source) => source.kind === "global")?.path);
+  const projectConfig = readJson(sources.find((source) => source.kind === "project")?.path);
   return merge(merge(merge(DEFAULT_CONFIG, packageConfig), globalConfig), projectConfig);
 }

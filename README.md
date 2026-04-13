@@ -122,6 +122,8 @@ The repo now includes a first runtime scaffold that can:
 - write conservative soul reflections back to MemPalace for reflective sessions and before compaction
 - expose debugging commands:
   - `/soul`
+  - `/soul-sections`
+  - `/soul-config`
   - `/soul-memory [query]`
   - `/soul-reload`
   - `/soul-reflect <text>`

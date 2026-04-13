@@ -3,7 +3,7 @@ import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 
-import { loadRuntimeConfig } from "./config.js";
+import { getRuntimeConfigSources, loadRuntimeConfig } from "./config.js";
 import { buildContinuityBrief } from "./continuity-brief.js";
 import { MemPalaceSelfhood } from "./mempalace-selfhood.js";
 import { detectProjectContext } from "./project-context.js";
@@ -35,6 +35,30 @@ function formatMemorySection(title: string, items: Array<{ text: string; wing?: 
 
 function formatSoulSources(soul: LoadedSoulDocument): string {
   return soul.sources.map((source) => `- ${source.kind}: ${source.path}`).join("\n");
+}
+
+function formatSectionNames(soul: LoadedSoulDocument): string {
+  const names = Object.keys(soul.sections);
+  if (names.length === 0) return "<none>";
+  return names.map((name) => `- ${name}`).join("\n");
+}
+
+function formatSectionPreviews(soul: LoadedSoulDocument): string {
+  const entries = Object.entries(soul.sections);
+  if (entries.length === 0) return "<none>";
+  return entries
+    .map(([name, text]) => `- ${name}: ${truncate(text, 180)}`)
+    .join("\n");
+}
+
+function formatConfigSources(cwd: string): string {
+  return getRuntimeConfigSources(cwd, import.meta.url)
+    .map((source) => `- ${source.kind}: ${source.path}${source.exists ? "" : " (missing)"}`)
+    .join("\n");
+}
+
+function formatConfig(runtimeConfig: RuntimeConfig): string {
+  return JSON.stringify(runtimeConfig, null, 2);
 }
 
 export default function organicPersonaExtension(pi: ExtensionAPI) {
@@ -196,6 +220,36 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
       if (memoryContext.source) parts.unshift(`Source: ${memoryContext.source}`);
       if (memoryContext.error) parts.push(`Error: ${memoryContext.error}`);
       showOutput(pi, "Soul memory", parts.join("\n\n"));
+    },
+  });
+
+  pi.registerCommand("soul-sections", {
+    description: "Show parsed soul sections and compact previews",
+    handler: async (_args, ctx) => {
+      if (!soul) await refreshState(ctx);
+      if (!soul) {
+        ctx.ui.notify(lastError || "No soul document loaded", "error");
+        return;
+      }
+      const parts = [
+        `Sources:\n${formatSoulSources(soul)}`,
+        `Overlay status:\n- style: ${soul.styleText ? "loaded" : "missing"}\n- anti-patterns: ${soul.antiPatternsText ? "loaded" : "missing"}\n- project soul: ${soul.projectText ? "loaded" : "missing"}\n- project config: ${soul.projectConfig ? "loaded" : "missing"}`,
+        `Parsed sections:\n${formatSectionNames(soul)}`,
+        `Section previews:\n${formatSectionPreviews(soul)}`,
+      ];
+      showOutput(pi, "Soul sections", parts.join("\n\n"));
+    },
+  });
+
+  pi.registerCommand("soul-config", {
+    description: "Show effective merged runtime config and config sources",
+    handler: async (_args, ctx) => {
+      if (!soul) await refreshState(ctx);
+      const parts = [
+        `Config sources:\n${formatConfigSources(ctx.cwd)}`,
+        `Effective config:\n${formatConfig(runtimeConfig)}`,
+      ];
+      showOutput(pi, "Soul config", parts.join("\n\n"));
     },
   });
 

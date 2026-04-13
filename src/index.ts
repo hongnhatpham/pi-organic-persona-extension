@@ -3,11 +3,12 @@ import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 
+import { loadRuntimeConfig } from "./config.js";
 import { buildContinuityBrief } from "./continuity-brief.js";
 import { MemPalaceSelfhood } from "./mempalace-selfhood.js";
 import { detectProjectContext } from "./project-context.js";
 import { buildCompactReflection, shouldAutoReflect } from "./reflection-writer.js";
-import type { ContinuityBrief, LoadedSoulDocument, RetrievedMemoryContext } from "./schema.js";
+import type { ContinuityBrief, LoadedSoulDocument, RetrievedMemoryContext, RuntimeConfig } from "./schema.js";
 import { loadSoulDocument } from "./soul-loader.js";
 
 const CUSTOM_MESSAGE_TYPE = "organic-soul-output";
@@ -51,6 +52,7 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
   let lastPrompt = "";
   let lastAutoReflectionTurn = 0;
   let turnCount = 0;
+  let runtimeConfig: RuntimeConfig = loadRuntimeConfig(process.cwd(), import.meta.url);
   const mempalace = new MemPalaceSelfhood();
 
   function syncStatus(ctx: ExtensionContext) {
@@ -62,6 +64,7 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
 
   async function refreshState(ctx: ExtensionContext) {
     try {
+      runtimeConfig = loadRuntimeConfig(ctx.cwd, import.meta.url);
       soul = loadSoulDocument(ctx.cwd, import.meta.url);
       mempalace.refresh(ctx.cwd);
       await mempalace.probe(ctx.signal);
@@ -94,7 +97,7 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
     lastPrompt = event.prompt;
     memoryContext = await mempalace.retrieve(event.prompt, ctx.cwd, ctx.signal);
     lastError = memoryContext.error;
-    const brief = buildContinuityBrief(event.prompt, soul, memoryContext);
+    const brief = buildContinuityBrief(event.prompt, soul, memoryContext, runtimeConfig);
     lastBrief = brief;
     syncStatus(ctx);
 
@@ -106,12 +109,12 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
 
   pi.on("agent_end", async (_event, ctx) => {
     turnCount += 1;
-    if (!soul || !lastBrief || !shouldAutoReflect(lastBrief.mode, lastPrompt)) {
+    if (!runtimeConfig.runtime.writeReflections || !soul || !lastBrief || !shouldAutoReflect(lastBrief.mode, lastPrompt)) {
       syncStatus(ctx);
       return;
     }
 
-    if (turnCount - lastAutoReflectionTurn < 2) {
+    if (turnCount - lastAutoReflectionTurn < runtimeConfig.runtime.minTurnsBetweenAutoReflections) {
       syncStatus(ctx);
       return;
     }
@@ -136,7 +139,7 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_before_compact", async (event, ctx) => {
-    if (!soul) return;
+    if (!runtimeConfig.runtime.writeOnCompaction || !soul) return;
     try {
       const project = detectProjectContext(ctx.cwd);
       const reflection = buildCompactReflection(event.branchEntries as Array<any>, project.projectName, lastBrief?.mode);
@@ -166,6 +169,7 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
         `Sources:\n${formatSoulSources(soul)}`,
         `Project: ${detectProjectContext(ctx.cwd).projectName ?? path.basename(ctx.cwd)}`,
         `Mode: ${lastBrief?.mode ?? "<none>"}`,
+        `Config: bullets=${runtimeConfig.runtime.maxContinuityBullets}, self=${runtimeConfig.runtime.maxSelfMemoryItems}, relationship=${runtimeConfig.runtime.maxRelationshipItems}, project=${runtimeConfig.runtime.maxProjectItems}`,
         `Continuity brief:\n${lastBrief?.rendered ?? "<none yet>"}`,
       ];
       showOutput(pi, "Soul state", parts.join("\n\n"));

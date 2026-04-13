@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { loadProjectOverlay } from "./project-overlay.js";
 import type { LoadedSoulDocument, SoulSource } from "./schema.js";
 
 function readIfExists(filePath: string | undefined): string | undefined {
@@ -50,23 +51,26 @@ function packageRoot(importMetaUrl: string): string {
   return path.resolve(path.dirname(fileURLToPath(importMetaUrl)), "..");
 }
 
-function collectSources(cwd: string, packageRootDir: string): Array<{ kind: SoulSource["kind"]; path: string; required?: boolean }> {
+function collectSources(packageRootDir: string): Array<{ kind: SoulSource["kind"]; path: string; required?: boolean }> {
   const home = os.homedir();
   return [
     ...(process.env.PI_SOUL_PATH ? [{ kind: "global" as const, path: process.env.PI_SOUL_PATH }] : []),
     { kind: "global" as const, path: path.join(home, ".pi", "agent", "soul", "SOUL.md") },
+    { kind: "style" as const, path: path.join(home, ".pi", "agent", "soul", "style.md") },
+    { kind: "anti-patterns" as const, path: path.join(home, ".pi", "agent", "soul", "anti-patterns.md") },
     { kind: "package" as const, path: path.join(packageRootDir, "SOUL.md"), required: true },
-    { kind: "project" as const, path: path.join(cwd, ".pi", "SOUL.md") },
   ];
 }
 
 export function loadSoulDocument(cwd: string, importMetaUrl: string): LoadedSoulDocument {
   const root = packageRoot(importMetaUrl);
-  const sources = collectSources(cwd, root);
+  const sources = collectSources(root);
+  const projectOverlay = loadProjectOverlay(cwd);
 
   let baseText: string | undefined;
   const resolvedSources: SoulSource[] = [];
-  let projectText: string | undefined;
+  let styleText: string | undefined;
+  let antiPatternsText: string | undefined;
 
   for (const source of sources) {
     const text = readIfExists(source.path);
@@ -75,8 +79,14 @@ export function loadSoulDocument(cwd: string, importMetaUrl: string): LoadedSoul
       continue;
     }
 
-    if (source.kind === "project") {
-      projectText = text;
+    if (source.kind === "style") {
+      styleText = text;
+      resolvedSources.push({ kind: source.kind, path: source.path });
+      continue;
+    }
+
+    if (source.kind === "anti-patterns") {
+      antiPatternsText = text;
       resolvedSources.push({ kind: source.kind, path: source.path });
       continue;
     }
@@ -91,10 +101,30 @@ export function loadSoulDocument(cwd: string, importMetaUrl: string): LoadedSoul
     throw new Error("No soul document could be loaded.");
   }
 
-  const combinedText = projectText ? `${baseText}\n\n## Project overlay\n\n${projectText}` : baseText;
+  const mergedBlocks = [baseText];
+  if (styleText) mergedBlocks.push(`## Style overlay\n\n${styleText}`);
+  if (antiPatternsText) mergedBlocks.push(`## Anti-patterns\n\n${antiPatternsText}`);
+  if (projectOverlay.soulText) {
+    mergedBlocks.push(`## Project overlay\n\n${projectOverlay.soulText}`);
+    resolvedSources.push({ kind: "project", path: path.join(cwd, ".pi", "SOUL.md") });
+  }
+  if (projectOverlay.config) {
+    const lines = [
+      ...(projectOverlay.config.tone?.length ? [`Tone: ${projectOverlay.config.tone.join(", ")}`] : []),
+      ...(projectOverlay.config.amplify?.length ? [`Amplify: ${projectOverlay.config.amplify.join(", ")}`] : []),
+      ...(projectOverlay.config.avoid?.length ? [`Avoid: ${projectOverlay.config.avoid.join(", ")}`] : []),
+    ];
+    if (lines.length > 0) mergedBlocks.push(`## Project config\n\n${lines.join("\n")}`);
+    resolvedSources.push({ kind: "project-config", path: path.join(cwd, ".pi", "soul.json") });
+  }
+
+  const combinedText = mergedBlocks.join("\n\n");
   return {
     baseText,
-    projectText,
+    projectText: projectOverlay.soulText,
+    styleText,
+    antiPatternsText,
+    projectConfig: projectOverlay.config,
     combinedText,
     sources: resolvedSources,
     sections: parseSections(combinedText),

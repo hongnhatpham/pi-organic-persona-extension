@@ -152,10 +152,13 @@ The extension currently looks for soul files in this order:
 
 1. `PI_SOUL_PATH`
 2. `~/.pi/agent/soul/SOUL.md`
-3. package-local `SOUL.md`
-4. project-local `.pi/SOUL.md`
+3. `~/.pi/agent/soul/style.md`
+4. `~/.pi/agent/soul/anti-patterns.md`
+5. package-local `SOUL.md`
+6. project-local `.pi/SOUL.md`
+7. project-local `.pi/soul.json`
 
-This allows a stable global soul plus optional repo-local overlays.
+This allows a stable global soul plus optional repo-local overlays and lightweight machine-readable tuning.
 
 ## MemPalace expectations
 
@@ -168,12 +171,27 @@ The scaffold reads the same personal-memory config locations as the existing Mem
 
 It expects a reachable MemPalace MCP bridge if reflective write-back and retrieval are to work.
 
+## Runtime config
+
+The scaffold now reads runtime defaults from:
+
+1. package-local `defaults.json`
+2. `~/.pi/agent/soul/defaults.json`
+3. project-local `.pi/soul.json`
+
+Current tunables include:
+
+- max continuity bullets
+- max self / relationship / project memory items
+- automatic reflection enable/disable
+- compaction reflection enable/disable
+- minimum turns between automatic reflections
+
 ## Near-term next steps
 
 Useful next implementation steps:
 
 - improve retrieval taxonomy and scoring for soul-core vs relationship vs project overlays
-- add structured runtime config instead of a few hardcoded limits
-- split project overlays into a dedicated parser/module
 - add commands for inspecting loaded soul sections and recent reflections
+- make reflective write heuristics richer than simple mode/keyword gating
 - eventually support branch-local divergence and reconciliation

@@ -1,4 +1,4 @@
-import type { ContinuityBrief, ContinuityBriefItem, LoadedSoulDocument, RetrievedMemoryContext, TaskMode } from "./schema.js";
+import type { ContinuityBrief, ContinuityBriefItem, LoadedSoulDocument, RetrievedMemoryContext, RuntimeConfig, TaskMode } from "./schema.js";
 
 function normalize(text: string): string {
   return text.toLowerCase();
@@ -74,26 +74,45 @@ function soulItemsForMode(soul: LoadedSoulDocument, mode: TaskMode): ContinuityB
   return selected.slice(0, 4);
 }
 
-function memoryItems(memory: RetrievedMemoryContext): ContinuityBriefItem[] {
+function projectConfigItems(soul: LoadedSoulDocument): ContinuityBriefItem[] {
+  const config = soul.projectConfig;
+  if (!config) return [];
+
   const items: ContinuityBriefItem[] = [];
-  for (const hit of memory.userConstraints.slice(0, 1)) {
-    items.push({ label: "Constraint", text: compact(hit.text, 160), source: "user" });
+  if (config.tone && config.tone.length > 0) {
+    items.push({ label: "Project", text: compact(`Tone: ${config.tone.join(", ")}`, 160), source: "project" });
   }
-  for (const hit of memory.selfMemory.slice(0, 1)) {
-    items.push({ label: "Becoming", text: compact(hit.text, 160), source: "self" });
+  if (config.amplify && config.amplify.length > 0) {
+    items.push({ label: "Project", text: compact(`Amplify: ${config.amplify.join(", ")}`, 160), source: "project" });
   }
-  for (const hit of memory.relationshipMemory.slice(0, 1)) {
-    items.push({ label: "Relationship", text: compact(hit.text, 160), source: "relationship" });
-  }
-  for (const hit of memory.projectOverlay.slice(0, 1)) {
-    items.push({ label: "Project", text: compact(hit.text, 160), source: "project" });
+  if (config.avoid && config.avoid.length > 0) {
+    items.push({ label: "Project", text: compact(`Avoid: ${config.avoid.join(", ")}`, 160), source: "project" });
   }
   return items;
 }
 
-export function buildContinuityBrief(prompt: string, soul: LoadedSoulDocument, memory: RetrievedMemoryContext): ContinuityBrief {
+function memoryItems(memory: RetrievedMemoryContext, soul: LoadedSoulDocument, config: RuntimeConfig): ContinuityBriefItem[] {
+  const items: ContinuityBriefItem[] = [];
+  for (const hit of memory.userConstraints.slice(0, 1)) {
+    items.push({ label: "Constraint", text: compact(hit.text, 160), source: "user" });
+  }
+  for (const hit of memory.selfMemory.slice(0, config.runtime.maxSelfMemoryItems)) {
+    items.push({ label: "Becoming", text: compact(hit.text, 160), source: "self" });
+  }
+  for (const hit of memory.relationshipMemory.slice(0, config.runtime.maxRelationshipItems)) {
+    items.push({ label: "Relationship", text: compact(hit.text, 160), source: "relationship" });
+  }
+  const projectItems = [
+    ...projectConfigItems(soul),
+    ...memory.projectOverlay.map((hit) => ({ label: "Project", text: compact(hit.text, 160), source: "project" as const })),
+  ].slice(0, config.runtime.maxProjectItems);
+  items.push(...projectItems);
+  return items;
+}
+
+export function buildContinuityBrief(prompt: string, soul: LoadedSoulDocument, memory: RetrievedMemoryContext, config: RuntimeConfig): ContinuityBrief {
   const mode = detectTaskMode(prompt);
-  const items = [...soulItemsForMode(soul, mode), ...memoryItems(memory)].slice(0, 6);
+  const items = [...soulItemsForMode(soul, mode), ...memoryItems(memory, soul, config)].slice(0, config.runtime.maxContinuityBullets);
   const rendered = items.length === 0
     ? ""
     : ["Continuity brief", ...items.map((item) => `- ${item.label}: ${item.text}`)].join("\n");

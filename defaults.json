@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "runtime": {
+    "maxContinuityBullets": 6,
+    "maxSelfMemoryItems": 1,
+    "maxRelationshipItems": 1,
+    "maxProjectItems": 1,
+    "writeReflections": true,
+    "writeOnCompaction": true,
+    "minTurnsBetweenAutoReflections": 2
+  },
+  "weights": {
+    "userConstraints": 1,
+    "soulCore": 0.95,
+    "projectOverlay": 0.8,
+    "relationship": 0.75,
+    "recentReflection": 0.65
+  }
+}

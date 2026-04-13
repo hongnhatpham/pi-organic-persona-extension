@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import type { RetrievedMemoryContext, MemoryHit } from "./schema.js";
+import type { RetrievedMemoryContext, MemoryHit, SoulReflectionEntry } from "./schema.js";
 import { detectProjectContext } from "./project-context.js";
 
 interface BackendConfig {
@@ -27,6 +27,16 @@ interface ToolSearchResult {
   room?: string;
   source_file?: string;
   similarity?: number;
+}
+
+interface ToolDiaryEntry {
+  timestamp?: string;
+  filed_at?: string;
+  created_at?: string;
+  topic?: string;
+  entry?: string;
+  text?: string;
+  content?: string;
 }
 
 function mempalaceProjectWing(project: ReturnType<typeof detectProjectContext>): string | undefined {
@@ -222,6 +232,25 @@ export class MemPalaceSelfhood {
       projectOverlay: dedupe(mapHits(projectResult)).slice(0, 1),
       ...(failure ? { error: failure.reason instanceof Error ? failure.reason.message : String(failure.reason) } : {}),
     };
+  }
+
+  async readRecentReflections(limit = 5, signal?: AbortSignal): Promise<SoulReflectionEntry[]> {
+    if (!this.client || !this.config) return [];
+    const lastN = Math.max(1, Math.min(limit * 3, 20));
+    const result = await this.client.callTool<{ entries?: ToolDiaryEntry[] }>("mempalace_diary_read", {
+      agent_name: this.config.backend.agentName,
+      last_n: lastN,
+    }, signal);
+
+    return (result.entries || [])
+      .map((entry) => ({
+        timestamp: String(entry.timestamp ?? entry.filed_at ?? entry.created_at ?? "unknown"),
+        topic: typeof entry.topic === "string" ? entry.topic : undefined,
+        text: String(entry.entry ?? entry.text ?? entry.content ?? "").replace(/\s+/g, " ").trim(),
+      }))
+      .filter((entry) => entry.text)
+      .filter((entry) => /(^|:|-)soul\b/i.test(entry.topic ?? "") || /\bSOUL_REFLECTION\b/.test(entry.text))
+      .slice(0, limit);
   }
 
   async writeReflection(entry: string, signal?: AbortSignal): Promise<boolean> {

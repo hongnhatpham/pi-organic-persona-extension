@@ -7,8 +7,8 @@ import { getRuntimeConfigSources, loadRuntimeConfig } from "./config.js";
 import { buildContinuityBrief } from "./continuity-brief.js";
 import { MemPalaceSelfhood } from "./mempalace-selfhood.js";
 import { detectProjectContext } from "./project-context.js";
-import { buildCompactReflection, shouldAutoReflect } from "./reflection-writer.js";
-import type { ContinuityBrief, LoadedSoulDocument, RetrievedMemoryContext, RuntimeConfig } from "./schema.js";
+import { buildCompactReflection, evaluateAutoReflection } from "./reflection-writer.js";
+import type { ContinuityBrief, LoadedSoulDocument, RetrievedMemoryContext, RuntimeConfig, SoulReflectionEntry } from "./schema.js";
 import { loadSoulDocument } from "./soul-loader.js";
 
 const CUSTOM_MESSAGE_TYPE = "organic-soul-output";
@@ -31,6 +31,13 @@ function showOutput(pi: ExtensionAPI, title: string, body: string): void {
 function formatMemorySection(title: string, items: Array<{ text: string; wing?: string; room?: string }>): string {
   if (items.length === 0) return `${title}: <none>`;
   return `${title}:\n${items.map((item) => `- ${item.text}${item.wing || item.room ? ` (${[item.wing, item.room].filter(Boolean).join("/")})` : ""}`).join("\n")}`;
+}
+
+function formatReflectionEntries(entries: SoulReflectionEntry[]): string {
+  if (entries.length === 0) return "<none>";
+  return entries
+    .map((entry, index) => `${index + 1}. ${entry.timestamp}${entry.topic ? ` topic=${entry.topic}` : ""}\n   ${truncate(entry.text, 260)}`)
+    .join("\n");
 }
 
 function formatSoulSources(soul: LoadedSoulDocument): string {
@@ -76,6 +83,7 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
   let lastPrompt = "";
   let lastAutoReflectionTurn = 0;
   let turnCount = 0;
+  let lastAutoReflectionDecision = "<none yet>";
   let runtimeConfig: RuntimeConfig = loadRuntimeConfig(process.cwd(), import.meta.url);
   const mempalace = new MemPalaceSelfhood();
 
@@ -133,20 +141,26 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
 
   pi.on("agent_end", async (_event, ctx) => {
     turnCount += 1;
-    if (!runtimeConfig.runtime.writeReflections || !soul || !lastBrief || !shouldAutoReflect(lastBrief.mode, lastPrompt)) {
+    const branchEntries = ctx.sessionManager.getBranch() as Array<any>;
+    const decision = lastBrief ? evaluateAutoReflection(lastBrief.mode, lastPrompt, branchEntries) : { shouldReflect: false, score: 0, signals: ["brief:missing"] };
+    lastAutoReflectionDecision = `${decision.shouldReflect ? "write" : "skip"} score=${decision.score}${decision.signals.length ? ` · ${decision.signals.join(", ")}` : ""}`;
+
+    if (!runtimeConfig.runtime.writeReflections || !soul || !lastBrief || !decision.shouldReflect) {
       syncStatus(ctx);
       return;
     }
 
     if (turnCount - lastAutoReflectionTurn < runtimeConfig.runtime.minTurnsBetweenAutoReflections) {
+      lastAutoReflectionDecision = `${lastAutoReflectionDecision} · cooldown`;
       syncStatus(ctx);
       return;
     }
 
     try {
       const project = detectProjectContext(ctx.cwd);
-      const reflection = buildCompactReflection(ctx.sessionManager.getBranch() as Array<any>, project.projectName, lastBrief.mode);
+      const reflection = buildCompactReflection(branchEntries, project.projectName, lastBrief.mode);
       if (!reflection || reflection === lastReflection) {
+        lastAutoReflectionDecision = `${lastAutoReflectionDecision} · duplicate-or-empty`;
         syncStatus(ctx);
         return;
       }
@@ -154,6 +168,7 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
       if (stored) {
         lastReflection = reflection;
         lastAutoReflectionTurn = turnCount;
+        lastAutoReflectionDecision = `${lastAutoReflectionDecision} · stored`;
       }
       lastError = undefined;
     } catch (error) {
@@ -193,6 +208,7 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
         `Sources:\n${formatSoulSources(soul)}`,
         `Project: ${detectProjectContext(ctx.cwd).projectName ?? path.basename(ctx.cwd)}`,
         `Mode: ${lastBrief?.mode ?? "<none>"}`,
+        `Auto-reflection: ${lastAutoReflectionDecision}`,
         `Config: bullets=${runtimeConfig.runtime.maxContinuityBullets}, self=${runtimeConfig.runtime.maxSelfMemoryItems}, relationship=${runtimeConfig.runtime.maxRelationshipItems}, project=${runtimeConfig.runtime.maxProjectItems}`,
         `Continuity brief:\n${lastBrief?.rendered ?? "<none yet>"}`,
       ];
@@ -250,6 +266,27 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
         `Effective config:\n${formatConfig(runtimeConfig)}`,
       ];
       showOutput(pi, "Soul config", parts.join("\n\n"));
+    },
+  });
+
+  pi.registerCommand("soul-reflections", {
+    description: "Show recent soul reflections stored in MemPalace diary",
+    handler: async (args, ctx) => {
+      if (!soul) await refreshState(ctx);
+      mempalace.refresh(ctx.cwd);
+      const requested = Number.parseInt(args.trim(), 10);
+      const count = Number.isFinite(requested) && requested > 0 ? Math.min(requested, 12) : 5;
+      try {
+        const entries = await mempalace.readRecentReflections(count, ctx.signal);
+        const parts = [
+          `Requested: ${count}`,
+          `Connected: ${memoryContext.connected ? "yes" : "no"}`,
+          `Recent reflections:\n${formatReflectionEntries(entries)}`,
+        ];
+        showOutput(pi, "Soul reflections", parts.join("\n\n"));
+      } catch (error) {
+        ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+      }
     },
   });
 

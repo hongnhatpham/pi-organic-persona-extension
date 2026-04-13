@@ -125,6 +125,7 @@ The repo now includes a first runtime scaffold that can:
   - `/soul-sections`
   - `/soul-config`
   - `/soul-memory [query]`
+  - `/soul-reflections [count]`
   - `/soul-reload`
   - `/soul-reflect <text>`
 
@@ -194,6 +195,6 @@ Current tunables include:
 Useful next implementation steps:
 
 - improve retrieval taxonomy and scoring for soul-core vs relationship vs project overlays
-- add commands for inspecting loaded soul sections and recent reflections
-- make reflective write heuristics richer than simple mode/keyword gating
 - eventually support branch-local divergence and reconciliation
+- add richer soul-specific inspection of how retrieved memory affected the final brief
+- experiment with reconciliation between stable soul text and newly reinforced reflective patterns

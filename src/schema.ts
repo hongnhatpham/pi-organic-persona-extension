@@ -31,6 +31,12 @@ export interface MemoryHit {
   score?: number;
 }
 
+export interface SoulReflectionEntry {
+  timestamp: string;
+  topic?: string;
+  text: string;
+}
+
 export interface RetrievedMemoryContext {
   connected: boolean;
   source?: string;

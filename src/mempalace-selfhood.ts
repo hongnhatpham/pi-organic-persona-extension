@@ -145,10 +145,13 @@ export class MemPalaceSelfhood {
   private config?: LoadedConfig;
   private client?: BridgeClient;
   private healthMessage?: string;
+  private healthy?: boolean;
 
   refresh(cwd: string) {
     this.config = readConfig(cwd);
     this.client = this.config ? new BridgeClient(this.config.backend) : undefined;
+    this.healthMessage = undefined;
+    this.healthy = undefined;
   }
 
   async probe(signal?: AbortSignal): Promise<void> {
@@ -157,14 +160,17 @@ export class MemPalaceSelfhood {
       const health = await this.client.health(signal);
       const status = (health?.status ?? {}) as Record<string, unknown>;
       this.healthMessage = typeof status.total_drawers === "number" ? `${status.total_drawers} drawers` : "ready";
+      this.healthy = true;
     } catch (error) {
       this.healthMessage = error instanceof Error ? error.message : String(error);
+      this.healthy = false;
     }
   }
 
   statusText(): string {
-    if (!this.config || !this.client) return "Soul local only";
-    return this.healthMessage ? `Soul + MemPalace · ${this.healthMessage}` : "Soul + MemPalace";
+    if (!this.config || !this.client) return "local";
+    if (this.healthy === false) return "mem?";
+    return "mem";
   }
 
   async retrieve(prompt: string, cwd: string, signal?: AbortSignal): Promise<RetrievedMemoryContext> {

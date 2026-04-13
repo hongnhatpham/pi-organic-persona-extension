@@ -88,10 +88,16 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
   const mempalace = new MemPalaceSelfhood();
 
   function syncStatus(ctx: ExtensionContext) {
-    const soulStatus = soul ? "Soul loaded" : "Soul missing";
-    const briefStatus = lastBrief ? `brief ${lastBrief.items.length}` : "brief 0";
-    const errorStatus = lastError ? ` · ${truncate(lastError, 48)}` : "";
-    ctx.ui.setStatus("organic-soul", `${soulStatus} · ${briefStatus} · ${mempalace.statusText()}${errorStatus}`);
+    if (!soul && !lastError) {
+      ctx.ui.setStatus("organic-soul", "Soul off");
+      return;
+    }
+
+    const briefStatus = `b${lastBrief?.items.length ?? 0}`;
+    const memoryStatus = mempalace.statusText();
+    const errorStatus = lastError ? ` · ! ${truncate(lastError, 28)}` : "";
+    const base = soul ? `Soul ${briefStatus} · ${memoryStatus}` : "Soul !";
+    ctx.ui.setStatus("organic-soul", `${base}${errorStatus}`);
   }
 
   async function refreshState(ctx: ExtensionContext) {

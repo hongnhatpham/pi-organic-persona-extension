@@ -39,6 +39,17 @@ interface ToolDiaryEntry {
   content?: string;
 }
 
+function normalizeWingSegment(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "agent";
+}
+
+function mempalaceAgentWing(agentName: string): string {
+  return `wing_${normalizeWingSegment(agentName)}`;
+}
+
 function mempalaceProjectWing(project: ReturnType<typeof detectProjectContext>): string | undefined {
   if (!project.projectId) return undefined;
   const normalized = (project.projectName || project.projectId)
@@ -186,6 +197,7 @@ export class MemPalaceSelfhood {
 
     const project = detectProjectContext(cwd);
     const projectWing = mempalaceProjectWing(project);
+    const agentWing = mempalaceAgentWing(this.config.backend.agentName);
     const maxItems = Math.max(1, Math.min(this.config.retrieval.maxItems, 2));
     const compactPrompt = truncate(prompt, 320);
 
@@ -199,13 +211,12 @@ export class MemPalaceSelfhood {
       this.client.callTool<{ results?: ToolSearchResult[] }>("mempalace_search", {
         query: `${compactPrompt} soul self identity becoming values reflection`,
         limit: maxItems,
-        wing: "wing_agent",
+        wing: agentWing,
       }, signal),
       this.client.callTool<{ results?: ToolSearchResult[] }>("mempalace_search", {
         query: `${compactPrompt} relationship trust autonomy disagreement surprise collaboration`,
         limit: maxItems,
-        wing: "wing_agent",
-        room: "workflow",
+        wing: agentWing,
       }, signal),
       projectWing
         ? this.client.callTool<{ results?: ToolSearchResult[] }>("mempalace_search", {

@@ -226,13 +226,12 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
     description: "Show the latest MemPalace-backed continuity memory buckets",
     handler: async (args, ctx) => {
       if (!soul) await refreshState(ctx);
-      const query = args.trim();
-      if (query) {
-        memoryContext = await mempalace.retrieve(query, ctx.cwd, ctx.signal);
-        lastError = memoryContext.error;
-        syncStatus(ctx);
-      }
+      const query = args.trim() || lastPrompt || "soul continuity identity preferences relationship";
+      memoryContext = await mempalace.retrieve(query, ctx.cwd, ctx.signal);
+      lastError = memoryContext.error;
+      syncStatus(ctx);
       const parts = [
+        `Query: ${query}`,
         `Connected: ${memoryContext.connected ? "yes" : "no"}`,
         formatMemorySection("User constraints", memoryContext.userConstraints),
         formatMemorySection("Self memory", memoryContext.selfMemory),

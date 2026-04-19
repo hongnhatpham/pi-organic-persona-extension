@@ -17,6 +17,8 @@ const COMPACTION_RE = /COMPACTION IMMINENT|SESSION:\d{4}-\d{2}-\d{2}|\|\s*★★
 const CODE_HEAVY_RE = /```|\b(?:ts|tsx|js|jsx|py|qml|json|toml|sh|bash|diff)\b|\b(?:npm|git|pnpm|yarn|rg|sed|grep|tsc|pytest|cargo)\b|\/[A-Za-z0-9._-]+\/[A-Za-z0-9._/-]+/;
 const VERIFICATION_RE = /(what i checked|what i confirmed|loader is configured|looks like `?soul\.md`? is loading correctly|loading correctly|pi settings include|includes the persona package|includes the path|copied the canonical soul file|file-based overlays|different layer|verified it\.? what i confirmed)/i;
 const DURABLE_INSIGHT_RE = /\b(should|shouldn't|must|matters?|prefer|value|need|want|autonomy|boundary|boundaries|earned|genuine|distinct(?:ness)?|judg(?:e)?ment|disagree|pressure[- ]?test|trust|warmth)\b/i;
+const TRANSCRIPT_RE = /\bUSER:|\bASSISTANT:/i;
+const REFLECTION_LESSON_RE = /\b(learned|realized|noticed|becoming|going forward|from now on|works better|works best|matters more|should|shouldn't|must|need to|prefer|value|boundary|autonomy|trust|earned|genuine|distinct(?:ness)?|honesty|disagree|pressure[- ]?test)\b/i;
 
 function extractText(content: unknown): string {
   if (typeof content === "string") return content;
@@ -89,6 +91,24 @@ function hasDurableInsightLanguage(value: string): boolean {
   return hasMeaningfulReflectionTheme(value) && DURABLE_INSIGHT_RE.test(value);
 }
 
+function looksTranscriptLike(value: string): boolean {
+  return TRANSCRIPT_RE.test(value);
+}
+
+function hasReflectionLessonForm(value: string): boolean {
+  return REFLECTION_LESSON_RE.test(value);
+}
+
+function isDistilledReflectionNote(value: string): boolean {
+  const compact = cleanSentence(value);
+  return Boolean(compact)
+    && !looksTranscriptLike(compact)
+    && !looksWorkLogLike(compact)
+    && !looksOperationalVerification(compact)
+    && hasMeaningfulReflectionTheme(compact)
+    && (hasReflectionLessonForm(compact) || hasMetaReflectionSignal(compact));
+}
+
 function splitSentences(value: string): string[] {
   return value
     .split(/(?<=[.!?])\s+|\n+/)
@@ -155,7 +175,8 @@ function extractInsightNotes(prompt: string, lastUserText: string, lastAssistant
     .filter((sentence) => hasMeaningfulReflectionTheme(sentence))
     .filter((sentence) => !looksWorkLogLike(sentence))
     .filter((sentence) => !looksOperationalVerification(sentence))
-    .filter((sentence) => hasDurableInsightLanguage(sentence) || hasMetaReflectionSignal(sentence))
+    .filter((sentence) => !looksTranscriptLike(sentence))
+    .filter((sentence) => isDistilledReflectionNote(sentence))
     .filter((sentence) => !/^[Ww]hy\b|^[Ww]hat\b|^[Hh]ow\b/.test(sentence) || /\b(should|want|prefer|value|need|matters?)\b/i.test(sentence));
 
   for (const sentence of candidateSentences.slice(0, 2)) {
@@ -168,13 +189,19 @@ function extractInsightNotes(prompt: string, lastUserText: string, lastAssistant
 export function classifyStoredReflection(text: string): StoredReflectionQuality {
   const compact = text.replace(/\s+/g, " ").trim();
   const hasInsightFormat = /\bNOTE\d*:/i.test(compact);
-  const hasConversationDump = /\bUSER:|\bASSISTANT:/i.test(compact);
+  const hasConversationDump = looksTranscriptLike(compact);
   const meaningful = hasMeaningfulReflectionTheme(compact) || hasInsightFormat;
   const workLog = looksWorkLogLike(compact);
+  const noteMatches = [...compact.matchAll(/\bNOTE\d*:(.*?)(?=\s+\|\s+(?:NOTE\d*:|[A-Z_]+:)|$)/gi)]
+    .map((match) => cleanSentence(match[1] || ""))
+    .filter(Boolean);
+  const distilledNotes = noteMatches.filter((note) => isDistilledReflectionNote(note));
 
+  if (hasConversationDump && !hasInsightFormat) return "work-log";
   if (workLog && !meaningful) return "work-log";
-  if (hasConversationDump && workLog && !hasInsightFormat) return "work-log";
-  if (meaningful && !workLog) return "identity";
+  if (hasInsightFormat && noteMatches.length > 0 && distilledNotes.length === noteMatches.length && !workLog) return "identity";
+  if (hasInsightFormat && distilledNotes.length > 0) return "mixed";
+  if (meaningful && !workLog && !hasConversationDump) return "mixed";
   return meaningful ? "mixed" : "work-log";
 }
 
@@ -240,6 +267,11 @@ export function evaluateAutoReflection(mode: TaskMode, prompt: string, branchEnt
     signals.push("user:durable-insight");
   }
 
+  if (hasReflectionLessonForm(lastAssistantText) || hasReflectionLessonForm(lastUserText)) {
+    score += 1;
+    signals.push("reflection:lesson-form");
+  }
+
   if (combinedText.length > 500) {
     score += 1;
     signals.push("depth:substantial-turn");
@@ -270,6 +302,11 @@ export function evaluateAutoReflection(mode: TaskMode, prompt: string, branchEnt
     signals.push("mode:design-non-identity");
   }
 
+  if (!hasReflectionLessonForm(lastAssistantText) && !hasReflectionLessonForm(lastUserText) && !hasMetaReflectionSignal(combinedText)) {
+    score -= 2;
+    signals.push("reflection:no-growth-lesson");
+  }
+
   if (isTrivialAck(compactPrompt)) {
     score -= 2;
     signals.push("prompt:acknowledgement");
@@ -281,19 +318,24 @@ export function evaluateAutoReflection(mode: TaskMode, prompt: string, branchEnt
   }
 
   const notes = extractInsightNotes(compactPrompt, lastUserText, lastAssistantText);
-  const durableNotes = notes.filter((note) => !looksWorkLogLike(note) && !looksOperationalVerification(note) && (hasDurableInsightLanguage(note) || hasMetaReflectionSignal(note)));
+  const durableNotes = notes.filter((note) => isDistilledReflectionNote(note));
   if (durableNotes.length > 0) {
     score += 2;
     signals.push("reflection:distillable");
   }
 
-  const hasDurableTurn = hasDurableInsightLanguage(lastUserText) || hasDurableInsightLanguage(lastAssistantText) || hasMetaReflectionSignal(compactPrompt) || hasMetaReflectionSignal(lastUserText);
-  const shouldReflect = score >= 4
+  const hasDurableTurn = durableNotes.length > 0
+    || hasMetaReflectionSignal(compactPrompt)
+    || hasMetaReflectionSignal(lastUserText)
+    || hasReflectionLessonForm(lastAssistantText)
+    || hasReflectionLessonForm(lastUserText);
+  const shouldReflect = score >= 5
     && durableNotes.length > 0
     && hasDurableTurn
     && Boolean(lastUserText || lastAssistantText)
     && !looksWorkLogLike(lastAssistantText)
-    && !looksOperationalVerification(lastAssistantText);
+    && !looksOperationalVerification(lastAssistantText)
+    && !looksTranscriptLike(lastAssistantText);
   return { shouldReflect, score, signals };
 }
 
@@ -315,9 +357,7 @@ export function buildCompactReflection(branchEntries: Array<any>, projectName?: 
   if (looksWorkLogLike(combined) && !hasDurableInsightLanguage(combined) && !hasMetaReflectionSignal(combined)) return undefined;
 
   const notes = extractInsightNotes("", userText, assistantText)
-    .filter((note) => !looksWorkLogLike(note))
-    .filter((note) => !looksOperationalVerification(note))
-    .filter((note) => hasDurableInsightLanguage(note) || hasMetaReflectionSignal(note));
+    .filter((note) => isDistilledReflectionNote(note));
   if (notes.length === 0) return undefined;
 
   const themes = inferThemes(combined);

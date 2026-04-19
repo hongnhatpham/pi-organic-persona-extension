@@ -7,7 +7,7 @@ import { getRuntimeConfigSources, loadRuntimeConfig } from "./config.js";
 import { buildContinuityBrief } from "./continuity-brief.js";
 import { MemPalaceSelfhood } from "./mempalace-selfhood.js";
 import { detectProjectContext } from "./project-context.js";
-import { buildCompactReflection, evaluateAutoReflection } from "./reflection-writer.js";
+import { buildCompactReflection, classifyStoredReflection, evaluateAutoReflection } from "./reflection-writer.js";
 import type { ContinuityBrief, LoadedSoulDocument, RetrievedMemoryContext, RuntimeConfig, SoulReflectionEntry } from "./schema.js";
 import { loadSoulDocument } from "./soul-loader.js";
 
@@ -36,7 +36,11 @@ function formatMemorySection(title: string, items: Array<{ text: string; wing?: 
 function formatReflectionEntries(entries: SoulReflectionEntry[]): string {
   if (entries.length === 0) return "<none>";
   return entries
-    .map((entry, index) => `${index + 1}. ${entry.timestamp}${entry.topic ? ` topic=${entry.topic}` : ""}\n   ${truncate(entry.text, 260)}`)
+    .map((entry, index) => {
+      const quality = classifyStoredReflection(entry.text);
+      const idSuffix = entry.id ? ` id=${entry.id}` : "";
+      return `${index + 1}. ${entry.timestamp}${entry.topic ? ` topic=${entry.topic}` : ""}${idSuffix} quality=${quality}\n   ${truncate(entry.text, 260)}`;
+    })
     .join("\n");
 }
 
@@ -281,17 +285,15 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
       mempalace.refresh(ctx.cwd);
       const requested = Number.parseInt(args.trim(), 10);
       const count = Number.isFinite(requested) && requested > 0 ? Math.min(requested, 12) : 5;
-      try {
-        const entries = await mempalace.readRecentReflections(count, ctx.signal);
-        const parts = [
-          `Requested: ${count}`,
-          `Connected: ${memoryContext.connected ? "yes" : "no"}`,
-          `Recent reflections:\n${formatReflectionEntries(entries)}`,
-        ];
-        showOutput(pi, "Soul reflections", parts.join("\n\n"));
-      } catch (error) {
-        ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
-      }
+      const result = await mempalace.readRecentReflections(count, ctx.signal);
+      const parts = [
+        `Requested: ${count}`,
+        `Connected: ${result.connected ? "yes" : "no"}`,
+        `Recent reflections:\n${formatReflectionEntries(result.entries)}`,
+      ];
+      if (result.source) parts.splice(2, 0, `Source: ${result.source}`);
+      if (result.error) parts.push(`Error: ${result.error}`);
+      showOutput(pi, "Soul reflections", parts.join("\n\n"));
     },
   });
 

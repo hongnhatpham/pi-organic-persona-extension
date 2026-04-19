@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import type { RetrievedMemoryContext, MemoryHit, SoulReflectionEntry } from "./schema.js";
+import type { RetrievedMemoryContext, MemoryHit, SoulReflectionEntry, SoulReflectionReadResult } from "./schema.js";
 import { detectProjectContext } from "./project-context.js";
 
 interface BackendConfig {
@@ -30,6 +30,7 @@ interface ToolSearchResult {
 }
 
 interface ToolDiaryEntry {
+  id?: string;
   timestamp?: string;
   filed_at?: string;
   created_at?: string;
@@ -251,23 +252,54 @@ export class MemPalaceSelfhood {
     };
   }
 
-  async readRecentReflections(limit = 5, signal?: AbortSignal): Promise<SoulReflectionEntry[]> {
-    if (!this.client || !this.config) return [];
-    const lastN = Math.max(1, Math.min(limit * 3, 20));
-    const result = await this.client.callTool<{ entries?: ToolDiaryEntry[] }>("mempalace_diary_read", {
-      agent_name: this.config.backend.agentName,
-      last_n: lastN,
-    }, signal);
+  async readRecentReflections(limit = 5, signal?: AbortSignal): Promise<SoulReflectionReadResult> {
+    if (!this.client || !this.config) {
+      return {
+        connected: false,
+        entries: [],
+      };
+    }
 
-    return (result.entries || [])
-      .map((entry) => ({
-        timestamp: String(entry.timestamp ?? entry.filed_at ?? entry.created_at ?? "unknown"),
-        topic: typeof entry.topic === "string" ? entry.topic : undefined,
-        text: String(entry.entry ?? entry.text ?? entry.content ?? "").replace(/\s+/g, " ").trim(),
-      }))
-      .filter((entry) => entry.text)
-      .filter((entry) => /(^|:|-)soul\b/i.test(entry.topic ?? "") || /\bSOUL_REFLECTION\b/.test(entry.text))
-      .slice(0, limit);
+    try {
+      const lastN = Math.max(1, Math.min(limit * 3, 20));
+      let result: { entries?: ToolDiaryEntry[]; id_source?: string };
+      try {
+        result = await this.client.callTool<{ entries?: ToolDiaryEntry[]; id_source?: string }>("mempalace_diary_read", {
+          agent_name: this.config.backend.agentName,
+          last_n: lastN,
+          include_ids: true,
+        }, signal);
+      } catch {
+        result = await this.client.callTool<{ entries?: ToolDiaryEntry[]; id_source?: string }>("mempalace_diary_read", {
+          agent_name: this.config.backend.agentName,
+          last_n: lastN,
+        }, signal);
+      }
+
+      const entries = (result.entries || [])
+        .map((entry) => ({
+          id: typeof entry.id === "string" ? entry.id : undefined,
+          timestamp: String(entry.timestamp ?? entry.filed_at ?? entry.created_at ?? "unknown"),
+          topic: typeof entry.topic === "string" ? entry.topic : undefined,
+          text: String(entry.entry ?? entry.text ?? entry.content ?? "").replace(/\s+/g, " ").trim(),
+        }))
+        .filter((entry) => entry.text)
+        .filter((entry) => /(^|:|-)soul\b/i.test(entry.topic ?? "") || /\bSOUL_REFLECTION\b/.test(entry.text))
+        .slice(0, limit);
+
+      return {
+        connected: true,
+        source: typeof result.id_source === "string" ? `${this.config.backend.url} · ${result.id_source}` : this.config.backend.url,
+        entries,
+      };
+    } catch (error) {
+      return {
+        connected: false,
+        source: this.config.backend.url,
+        entries: [],
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   async writeReflection(entry: string, signal?: AbortSignal): Promise<boolean> {

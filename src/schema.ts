@@ -32,9 +32,17 @@ export interface MemoryHit {
 }
 
 export interface SoulReflectionEntry {
+  id?: string;
   timestamp: string;
   topic?: string;
   text: string;
+}
+
+export interface SoulReflectionReadResult {
+  connected: boolean;
+  source?: string;
+  entries: SoulReflectionEntry[];
+  error?: string;
 }
 
 export interface RetrievedMemoryContext {

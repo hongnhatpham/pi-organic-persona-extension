@@ -20,7 +20,7 @@ const DEFAULT_CONFIG: RuntimeConfig = {
     maxProjectItems: 1,
     writeReflections: true,
     writeOnCompaction: true,
-    minTurnsBetweenAutoReflections: 2,
+    minTurnsBetweenAutoReflections: 4,
   },
   weights: {
     userConstraints: 1,

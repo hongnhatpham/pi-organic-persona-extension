@@ -7,7 +7,7 @@ import { getRuntimeConfigSources, loadRuntimeConfig } from "./config.js";
 import { buildContinuityBrief } from "./continuity-brief.js";
 import { MemPalaceSelfhood } from "./mempalace-selfhood.js";
 import { detectProjectContext } from "./project-context.js";
-import { buildCompactReflection, classifyStoredReflection, evaluateAutoReflection, isReflectionDuplicate } from "./reflection-writer.js";
+import { buildCompactReflection, classifyStoredReflection, evaluateAutoReflection, isReflectionDuplicate, reflectionAlreadyInSoul } from "./reflection-writer.js";
 import type { ContinuityBrief, LoadedSoulDocument, RetrievedMemoryContext, RuntimeConfig, SoulReflectionEntry } from "./schema.js";
 import { loadSoulDocument } from "./soul-loader.js";
 
@@ -152,16 +152,23 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
   pi.on("agent_end", async (_event, ctx) => {
     turnCount += 1;
     const branchEntries = ctx.sessionManager.getBranch() as Array<any>;
-    const decision = lastBrief ? evaluateAutoReflection(lastBrief.mode, lastPrompt, branchEntries) : { shouldReflect: false, score: 0, signals: ["brief:missing"] };
-    lastAutoReflectionDecision = `${decision.shouldReflect ? "write" : "skip"} score=${decision.score}${decision.signals.length ? ` · ${decision.signals.join(", ")}` : ""}`;
 
-    if (!runtimeConfig.runtime.writeReflections || !soul || !lastBrief || !decision.shouldReflect) {
+    if (!runtimeConfig.runtime.writeReflections || !soul || !lastBrief) {
+      lastAutoReflectionDecision = "skip · reflection-disabled-or-brief-missing";
       syncStatus(ctx);
       return;
     }
 
     if (turnCount - lastAutoReflectionTurn < runtimeConfig.runtime.minTurnsBetweenAutoReflections) {
-      lastAutoReflectionDecision = `${lastAutoReflectionDecision} · cooldown`;
+      const remaining = runtimeConfig.runtime.minTurnsBetweenAutoReflections - (turnCount - lastAutoReflectionTurn);
+      lastAutoReflectionDecision = `wait · history still accumulating (${Math.max(0, remaining)} more turn${remaining === 1 ? "" : "s"})`;
+      syncStatus(ctx);
+      return;
+    }
+
+    const decision = evaluateAutoReflection(lastBrief.mode, lastPrompt, branchEntries);
+    lastAutoReflectionDecision = `${decision.shouldReflect ? "write" : "skip"} score=${decision.score}${decision.signals.length ? ` · ${decision.signals.join(", ")}` : ""}`;
+    if (!decision.shouldReflect) {
       syncStatus(ctx);
       return;
     }
@@ -170,14 +177,20 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
       const project = detectProjectContext(ctx.cwd);
       const reflection = buildCompactReflection(branchEntries, project.projectName, lastBrief.mode);
       if (!reflection || reflection === lastReflection) {
-        lastAutoReflectionDecision = `${lastAutoReflectionDecision} · duplicate-or-empty`;
+        lastAutoReflectionDecision = `${lastAutoReflectionDecision} · empty`;
+        syncStatus(ctx);
+        return;
+      }
+
+      if (reflectionAlreadyInSoul(reflection, soul.combinedText)) {
+        lastAutoReflectionDecision = `${lastAutoReflectionDecision} · already-in-soul`;
         syncStatus(ctx);
         return;
       }
 
       const recent = await mempalace.readRecentReflections(6, ctx.signal);
       if (isReflectionDuplicate(reflection, recent.entries.map((entry) => entry.text))) {
-        lastAutoReflectionDecision = `${lastAutoReflectionDecision} · deduped-against-memory`;
+        lastAutoReflectionDecision = `${lastAutoReflectionDecision} · duplicate`;
         syncStatus(ctx);
         return;
       }
@@ -201,6 +214,7 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
       const project = detectProjectContext(ctx.cwd);
       const reflection = buildCompactReflection(event.branchEntries as Array<any>, project.projectName, lastBrief?.mode);
       if (!reflection || reflection === lastReflection) return;
+      if (soul && reflectionAlreadyInSoul(reflection, soul.combinedText)) return;
       const recent = await mempalace.readRecentReflections(6, ctx.signal);
       if (isReflectionDuplicate(reflection, recent.entries.map((entry) => entry.text))) return;
       const stored = await mempalace.writeReflection(reflection, ctx.signal);

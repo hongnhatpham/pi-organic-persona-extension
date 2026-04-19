@@ -15,6 +15,8 @@ const META_REFLECTION_RE = /(soul reflections?|personality reflections?|identity
 const WORKLOG_RE = /(done\.?|implemented|shipped|wired|committed|pushed|changed|added|fixed|login|backend auth|route|endpoint|convex|commit|file delivery|publicFiles|preparePublic|\/[^\s|`]+|`[0-9a-f]{7,}`|###|####)/i;
 const COMPACTION_RE = /COMPACTION IMMINENT|SESSION:\d{4}-\d{2}-\d{2}|\|\s*★★/i;
 const CODE_HEAVY_RE = /```|\b(?:ts|tsx|js|jsx|py|qml|json|toml|sh|bash|diff)\b|\b(?:npm|git|pnpm|yarn|rg|sed|grep|tsc|pytest|cargo)\b|\/[A-Za-z0-9._-]+\/[A-Za-z0-9._/-]+/;
+const VERIFICATION_RE = /(what i checked|what i confirmed|loader is configured|looks like `?soul\.md`? is loading correctly|loading correctly|pi settings include|includes the persona package|includes the path|copied the canonical soul file|file-based overlays|different layer|verified it\.? what i confirmed)/i;
+const DURABLE_INSIGHT_RE = /\b(should|shouldn't|must|matters?|prefer|value|need|want|autonomy|boundary|boundaries|earned|genuine|distinct(?:ness)?|judg(?:e)?ment|disagree|pressure[- ]?test|trust|warmth)\b/i;
 
 function extractText(content: unknown): string {
   if (typeof content === "string") return content;
@@ -77,6 +79,14 @@ function looksCodeHeavy(value: string): boolean {
 
 function looksWorkLogLike(value: string): boolean {
   return WORKLOG_RE.test(value) || COMPACTION_RE.test(value) || (looksCodeHeavy(value) && !hasMeaningfulReflectionTheme(value));
+}
+
+function looksOperationalVerification(value: string): boolean {
+  return VERIFICATION_RE.test(value);
+}
+
+function hasDurableInsightLanguage(value: string): boolean {
+  return hasMeaningfulReflectionTheme(value) && DURABLE_INSIGHT_RE.test(value);
 }
 
 function splitSentences(value: string): string[] {
@@ -144,6 +154,8 @@ function extractInsightNotes(prompt: string, lastUserText: string, lastAssistant
     .filter((sentence) => sentence.length >= 24)
     .filter((sentence) => hasMeaningfulReflectionTheme(sentence))
     .filter((sentence) => !looksWorkLogLike(sentence))
+    .filter((sentence) => !looksOperationalVerification(sentence))
+    .filter((sentence) => hasDurableInsightLanguage(sentence) || hasMetaReflectionSignal(sentence))
     .filter((sentence) => !/^[Ww]hy\b|^[Ww]hat\b|^[Hh]ow\b/.test(sentence) || /\b(should|want|prefer|value|need|matters?)\b/i.test(sentence));
 
   for (const sentence of candidateSentences.slice(0, 2)) {
@@ -218,6 +230,16 @@ export function evaluateAutoReflection(mode: TaskMode, prompt: string, branchEnt
     signals.push("user:reflective-language");
   }
 
+  if (hasDurableInsightLanguage(lastAssistantText)) {
+    score += 1;
+    signals.push("assistant:durable-insight");
+  }
+
+  if (hasDurableInsightLanguage(lastUserText)) {
+    score += 1;
+    signals.push("user:durable-insight");
+  }
+
   if (combinedText.length > 500) {
     score += 1;
     signals.push("depth:substantial-turn");
@@ -233,9 +255,19 @@ export function evaluateAutoReflection(mode: TaskMode, prompt: string, branchEnt
     signals.push("context:work-log");
   }
 
+  if (looksOperationalVerification(lastAssistantText)) {
+    score -= 4;
+    signals.push("assistant:verification-log");
+  }
+
   if (looksCodeHeavy(combinedText) && !hasMeaningfulReflectionTheme(combinedText)) {
     score -= 2;
     signals.push("context:code-heavy");
+  }
+
+  if (mode === "design" && !hasDurableInsightLanguage(lastUserText) && !hasDurableInsightLanguage(lastAssistantText) && !hasMetaReflectionSignal(combinedText)) {
+    score -= 3;
+    signals.push("mode:design-non-identity");
   }
 
   if (isTrivialAck(compactPrompt)) {
@@ -249,12 +281,19 @@ export function evaluateAutoReflection(mode: TaskMode, prompt: string, branchEnt
   }
 
   const notes = extractInsightNotes(compactPrompt, lastUserText, lastAssistantText);
-  if (notes.length > 0) {
+  const durableNotes = notes.filter((note) => !looksWorkLogLike(note) && !looksOperationalVerification(note) && (hasDurableInsightLanguage(note) || hasMetaReflectionSignal(note)));
+  if (durableNotes.length > 0) {
     score += 2;
     signals.push("reflection:distillable");
   }
 
-  const shouldReflect = score >= 3 && notes.length > 0 && Boolean(lastUserText || lastAssistantText) && !looksWorkLogLike(lastAssistantText);
+  const hasDurableTurn = hasDurableInsightLanguage(lastUserText) || hasDurableInsightLanguage(lastAssistantText) || hasMetaReflectionSignal(compactPrompt) || hasMetaReflectionSignal(lastUserText);
+  const shouldReflect = score >= 4
+    && durableNotes.length > 0
+    && hasDurableTurn
+    && Boolean(lastUserText || lastAssistantText)
+    && !looksWorkLogLike(lastAssistantText)
+    && !looksOperationalVerification(lastAssistantText);
   return { shouldReflect, score, signals };
 }
 
@@ -272,8 +311,13 @@ export function buildCompactReflection(branchEntries: Array<any>, projectName?: 
   const assistantText = lastAssistant ? extractText(lastAssistant.content) : "";
   const combined = [userText, assistantText].filter(Boolean).join("\n");
   if (!combined.trim()) return undefined;
+  if (looksOperationalVerification(assistantText) && !hasMetaReflectionSignal(combined)) return undefined;
+  if (looksWorkLogLike(combined) && !hasDurableInsightLanguage(combined) && !hasMetaReflectionSignal(combined)) return undefined;
 
-  const notes = extractInsightNotes("", userText, assistantText);
+  const notes = extractInsightNotes("", userText, assistantText)
+    .filter((note) => !looksWorkLogLike(note))
+    .filter((note) => !looksOperationalVerification(note))
+    .filter((note) => hasDurableInsightLanguage(note) || hasMetaReflectionSignal(note));
   if (notes.length === 0) return undefined;
 
   const themes = inferThemes(combined);
@@ -284,5 +328,6 @@ export function buildCompactReflection(branchEntries: Array<any>, projectName?: 
   notes.slice(0, 2).forEach((note, index) => {
     parts.push(`NOTE${index + 1}:${note}`);
   });
-  return parts.join(" | ");
+  const reflection = parts.join(" | ");
+  return classifyStoredReflection(reflection) === "identity" ? reflection : undefined;
 }

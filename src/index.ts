@@ -350,4 +350,50 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
       }
     },
   });
+
+  pi.registerCommand("reflect-now", {
+    description: "Inspect the current transcript reflection candidate; add --write to store it",
+    handler: async (args, ctx) => {
+      if (!soul) await refreshState(ctx);
+      if (!soul) {
+        ctx.ui.notify(lastError || "No soul document loaded", "error");
+        return;
+      }
+
+      const shouldWrite = /(^|\s)(--write|-w)(\s|$)/.test(args);
+      const mode = lastBrief?.mode ?? "default";
+      const branchEntries = ctx.sessionManager.getBranch() as Array<any>;
+      const decision = evaluateAutoReflection(mode, lastPrompt, branchEntries);
+      const project = detectProjectContext(ctx.cwd);
+      const reflection = buildCompactReflection(branchEntries, project.projectName, mode);
+      const alreadyInSoul = reflection ? reflectionAlreadyInSoul(reflection, soul.combinedText) : false;
+
+      mempalace.refresh(ctx.cwd);
+      const recent = await mempalace.readRecentReflections(6, ctx.signal);
+      const duplicate = reflection ? isReflectionDuplicate(reflection, recent.entries.map((entry) => entry.text)) : false;
+      const wouldStore = Boolean(reflection) && !alreadyInSoul && !duplicate && reflection !== lastReflection;
+
+      let stored = false;
+      if (shouldWrite && wouldStore) {
+        stored = await mempalace.writeReflection(reflection!, ctx.signal);
+        if (stored) {
+          lastReflection = reflection!;
+          lastAutoReflectionTurn = turnCount;
+        }
+      }
+
+      const parts = [
+        `Mode: ${mode}`,
+        `Decision: ${decision.shouldReflect ? "write" : "skip"} score=${decision.score}${decision.signals.length ? ` · ${decision.signals.join(", ")}` : ""}`,
+        `Already in soul: ${alreadyInSoul ? "yes" : "no"}`,
+        `Duplicate in recent reflections: ${duplicate ? "yes" : "no"}`,
+        `Would store: ${wouldStore ? "yes" : "no"}`,
+        `Action: ${shouldWrite ? (stored ? "stored" : "not stored") : "preview only (add --write to store)"}`,
+        `Candidate:\n${reflection ?? "<none>"}`,
+      ];
+      if (recent.source) parts.splice(4, 0, `Memory source: ${recent.source}`);
+      if (recent.error) parts.push(`Memory error: ${recent.error}`);
+      showOutput(pi, "Reflect now", parts.join("\n\n"));
+    },
+  });
 }

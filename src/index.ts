@@ -7,7 +7,7 @@ import { getRuntimeConfigSources, loadRuntimeConfig } from "./config.js";
 import { buildContinuityBrief } from "./continuity-brief.js";
 import { MemPalaceSelfhood } from "./mempalace-selfhood.js";
 import { detectProjectContext } from "./project-context.js";
-import { buildCompactReflection, classifyStoredReflection, evaluateAutoReflection } from "./reflection-writer.js";
+import { buildCompactReflection, classifyStoredReflection, evaluateAutoReflection, isReflectionDuplicate } from "./reflection-writer.js";
 import type { ContinuityBrief, LoadedSoulDocument, RetrievedMemoryContext, RuntimeConfig, SoulReflectionEntry } from "./schema.js";
 import { loadSoulDocument } from "./soul-loader.js";
 
@@ -174,6 +174,14 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
         syncStatus(ctx);
         return;
       }
+
+      const recent = await mempalace.readRecentReflections(6, ctx.signal);
+      if (isReflectionDuplicate(reflection, recent.entries.map((entry) => entry.text))) {
+        lastAutoReflectionDecision = `${lastAutoReflectionDecision} · deduped-against-memory`;
+        syncStatus(ctx);
+        return;
+      }
+
       const stored = await mempalace.writeReflection(reflection, ctx.signal);
       if (stored) {
         lastReflection = reflection;
@@ -193,6 +201,8 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
       const project = detectProjectContext(ctx.cwd);
       const reflection = buildCompactReflection(event.branchEntries as Array<any>, project.projectName, lastBrief?.mode);
       if (!reflection || reflection === lastReflection) return;
+      const recent = await mempalace.readRecentReflections(6, ctx.signal);
+      if (isReflectionDuplicate(reflection, recent.entries.map((entry) => entry.text))) return;
       const stored = await mempalace.writeReflection(reflection, ctx.signal);
       if (stored) lastReflection = reflection;
       lastError = undefined;

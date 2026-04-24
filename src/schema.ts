@@ -1,7 +1,7 @@
 export type TaskMode = "default" | "design" | "external" | "reflective";
 
 export interface SoulSource {
-  kind: "package" | "global" | "project" | "project-config" | "style" | "anti-patterns";
+  kind: "package" | "global" | "project" | "project-config" | "style" | "anti-patterns" | "persona-store";
   path: string;
 }
 
@@ -51,6 +51,7 @@ export interface RetrievedMemoryContext {
   userConstraints: MemoryHit[];
   selfMemory: MemoryHit[];
   relationshipMemory: MemoryHit[];
+  recentReflections: MemoryHit[];
   projectOverlay: MemoryHit[];
   error?: string;
 }

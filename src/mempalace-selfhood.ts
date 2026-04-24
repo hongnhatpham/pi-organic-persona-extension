@@ -4,6 +4,7 @@ import path from "node:path";
 
 import type { RetrievedMemoryContext, MemoryHit, SoulReflectionEntry, SoulReflectionReadResult } from "./schema.js";
 import { detectProjectContext } from "./project-context.js";
+import { classifyStoredReflection } from "./reflection-writer.js";
 
 interface BackendConfig {
   url: string;
@@ -137,20 +138,83 @@ class BridgeClient {
   }
 }
 
+const STOP_WORDS = new Set(["that", "this", "with", "from", "into", "should", "would", "could", "about", "through", "their", "there", "because", "which", "when", "what", "hong", "soul", "reflection", "note", "mode", "date", "themes"]);
+
+function similarityTokens(value: string): Set<string> {
+  return new Set(value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]+/g, " ")
+    .split(/\s+/)
+    .filter((token) => token.length >= 4 && !STOP_WORDS.has(token)));
+}
+
+function tokenSimilarity(a: string, b: string): number {
+  const aTokens = similarityTokens(a);
+  const bTokens = similarityTokens(b);
+  if (aTokens.size === 0 || bTokens.size === 0) return 0;
+  let overlap = 0;
+  for (const token of aTokens) if (bTokens.has(token)) overlap += 1;
+  return overlap / Math.max(aTokens.size, bTokens.size);
+}
+
 function dedupe(items: MemoryHit[]): MemoryHit[] {
-  const map = new Map<string, MemoryHit>();
-  for (const item of items) {
-    const key = `${item.wing || ""}:${item.room || ""}:${item.text}`;
-    const existing = map.get(key);
-    if (!existing || (item.score ?? 0) > (existing.score ?? 0)) map.set(key, item);
+  const sorted = [...items].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+  const result: MemoryHit[] = [];
+  for (const item of sorted) {
+    const duplicate = result.some((existing) => {
+      if ((existing.wing || "") !== (item.wing || "") || (existing.room || "") !== (item.room || "")) return false;
+      if (existing.text === item.text) return true;
+      return tokenSimilarity(existing.text, item.text) >= 0.7;
+    });
+    if (!duplicate) result.push(item);
   }
-  return [...map.values()].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+  return result;
 }
 
 function truncate(value: string, max = 220): string {
   const compact = value.replace(/\s+/g, " ").trim();
   if (compact.length <= max) return compact;
   return `${compact.slice(0, max - 1).trimEnd()}…`;
+}
+
+function parseSoulReflectionNotes(value: string): string[] {
+  return [...value.matchAll(/\bNOTE\d*:(.*?)(?=\s+\|\s+(?:NOTE\d*:|[A-Z_]+:)|$)/gi)]
+    .map((match) => (match[1] || "").replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+}
+
+function readableReflectionText(value: string): string {
+  const notes = parseSoulReflectionNotes(value);
+  if (notes.length === 0) return value;
+  return notes.join(" ");
+}
+
+function looksLikeMemoryNoise(value: string): boolean {
+  return /\bUSER:|\bASSISTANT:|what i changed|implemented|shipped|wired|committed|pushed|fixed|route|endpoint|convex|openrouter|docker|tailscale|repo|repository|extension|bridge|from the repo root|smoke test/i.test(value);
+}
+
+function usefulSelfhoodHit(value: string, bucket: "self" | "relationship"): boolean {
+  const text = value.replace(/\s+/g, " ").trim();
+  if (!text) return false;
+  if (/\bSOUL_REFLECTION\b/.test(text)) return classifyStoredReflection(text) !== "work-log";
+  if (looksLikeMemoryNoise(text)) return false;
+  const self = /\b(self|selfhood|continuity|becoming|identity|voice|values?|judg(?:e)?ment|honest|distinct|preference|style|warmth|autonomy)\b/i.test(text);
+  const relationship = /\b(relationship|trust|autonomy|disagree|collaboration|pressure[- ]?test|warmth|intrusive|respect|counterpart)\b/i.test(text);
+  return bucket === "relationship" ? relationship : self;
+}
+
+function mapSearchHits(value: PromiseSettledResult<{ results?: ToolSearchResult[] }>, bucket?: "self" | "relationship"): MemoryHit[] {
+  if (value.status !== "fulfilled") return [];
+  return (value.value.results || [])
+    .map((hit) => ({
+      text: truncate(readableReflectionText(hit.text)),
+      rawText: hit.text,
+      wing: hit.wing,
+      room: hit.room,
+      score: hit.similarity,
+    }))
+    .filter((hit) => !bucket || usefulSelfhoodHit(hit.rawText, bucket))
+    .map(({ rawText: _rawText, ...hit }) => hit);
 }
 
 export class MemPalaceSelfhood {
@@ -192,6 +256,7 @@ export class MemPalaceSelfhood {
         userConstraints: [],
         selfMemory: [],
         relationshipMemory: [],
+        recentReflections: [],
         projectOverlay: [],
       };
     }
@@ -199,25 +264,27 @@ export class MemPalaceSelfhood {
     const project = detectProjectContext(cwd);
     const projectWing = mempalaceProjectWing(project);
     const agentWing = mempalaceAgentWing(this.config.backend.agentName);
-    const maxItems = Math.max(1, Math.min(this.config.retrieval.maxItems, 2));
+    const maxItems = Math.max(1, Math.min(this.config.retrieval.maxItems, 3));
     const compactPrompt = truncate(prompt, 320);
 
     const searches = await Promise.allSettled([
       this.client.callTool<{ results?: ToolSearchResult[] }>("mempalace_search", {
-        query: `${compactPrompt} preferences boundaries trust voice style guidance`,
+        query: `${compactPrompt} explicit user preferences boundaries voice style instructions`,
         limit: maxItems,
         wing: "wing_user",
         room: "preferences",
       }, signal),
       this.client.callTool<{ results?: ToolSearchResult[] }>("mempalace_search", {
-        query: `${compactPrompt} soul self identity becoming values reflection`,
+        query: `SOUL_REFLECTION identity selfhood becoming values judgment voice ${compactPrompt}`,
         limit: maxItems,
         wing: agentWing,
+        room: "diary",
       }, signal),
       this.client.callTool<{ results?: ToolSearchResult[] }>("mempalace_search", {
-        query: `${compactPrompt} relationship trust autonomy disagreement surprise collaboration`,
+        query: `SOUL_REFLECTION relationship trust autonomy disagreement collaboration warmth ${compactPrompt}`,
         limit: maxItems,
         wing: agentWing,
+        room: "diary",
       }, signal),
       projectWing
         ? this.client.callTool<{ results?: ToolSearchResult[] }>("mempalace_search", {
@@ -226,28 +293,29 @@ export class MemPalaceSelfhood {
             wing: projectWing,
           }, signal)
         : Promise.resolve({ results: [] }),
+      this.readRecentReflections(4, signal),
     ]);
 
-    const [userResult, selfResult, relationshipResult, projectResult] = searches;
+    const [userResult, selfResult, relationshipResult, projectResult, recentResult] = searches;
     const failure = searches.find((entry) => entry.status === "rejected") as PromiseRejectedResult | undefined;
-
-    const mapHits = (value: PromiseSettledResult<{ results?: ToolSearchResult[] }>): MemoryHit[] => {
-      if (value.status !== "fulfilled") return [];
-      return (value.value.results || []).map((hit) => ({
-        text: truncate(hit.text),
-        wing: hit.wing,
-        room: hit.room,
-        score: hit.similarity,
-      }));
-    };
+    const recentReflections = recentResult.status === "fulfilled"
+      ? recentResult.value.entries
+        .filter((entry) => classifyStoredReflection(entry.text) !== "work-log")
+        .map((entry) => ({
+          text: truncate(readableReflectionText(entry.text), 220),
+          wing: agentWing,
+          room: "diary",
+        }))
+      : [];
 
     return {
       connected: !failure,
       source: this.config.backend.url,
-      userConstraints: dedupe(mapHits(userResult)).slice(0, 2),
-      selfMemory: dedupe(mapHits(selfResult)).slice(0, 2),
-      relationshipMemory: dedupe(mapHits(relationshipResult)).slice(0, 2),
-      projectOverlay: dedupe(mapHits(projectResult)).slice(0, 1),
+      userConstraints: dedupe(mapSearchHits(userResult)).slice(0, 2),
+      selfMemory: dedupe(mapSearchHits(selfResult, "self")).slice(0, 2),
+      relationshipMemory: dedupe(mapSearchHits(relationshipResult, "relationship")).slice(0, 2),
+      recentReflections: dedupe(recentReflections).slice(0, 2),
+      projectOverlay: dedupe(mapSearchHits(projectResult)).slice(0, 1),
       ...(failure ? { error: failure.reason instanceof Error ? failure.reason.message : String(failure.reason) } : {}),
     };
   }
@@ -261,7 +329,7 @@ export class MemPalaceSelfhood {
     }
 
     try {
-      const lastN = Math.max(1, Math.min(limit * 3, 20));
+      const lastN = Math.max(1, Math.min(limit * 3, 100));
       let result: { entries?: ToolDiaryEntry[]; id_source?: string };
       try {
         result = await this.client.callTool<{ entries?: ToolDiaryEntry[]; id_source?: string }>("mempalace_diary_read", {
@@ -308,6 +376,14 @@ export class MemPalaceSelfhood {
       agent_name: this.config.backend.agentName,
       topic: "soul",
       entry,
+    }, signal);
+    return true;
+  }
+
+  async deleteDrawer(id: string, signal?: AbortSignal): Promise<boolean> {
+    if (!this.client || !this.config || !id.trim()) return false;
+    await this.client.callTool("mempalace_delete_drawer", {
+      drawer_id: id,
     }, signal);
     return true;
   }

@@ -7,7 +7,7 @@ import { getRuntimeConfigSources, loadRuntimeConfig } from "./config.js";
 import { buildContinuityBrief } from "./continuity-brief.js";
 import { MemPalaceSelfhood } from "./mempalace-selfhood.js";
 import { detectProjectContext } from "./project-context.js";
-import { buildCompactReflection, classifyStoredReflection, evaluateAutoReflection, isReflectionDuplicate, reflectionAlreadyInSoul } from "./reflection-writer.js";
+import { buildCompactReflection, buildManualReflection, classifyStoredReflection, evaluateAutoReflection, isReflectionDuplicate, reflectionAlreadyInSoul } from "./reflection-writer.js";
 import type { ContinuityBrief, LoadedSoulDocument, RetrievedMemoryContext, RuntimeConfig, SoulReflectionEntry } from "./schema.js";
 import { loadSoulDocument } from "./soul-loader.js";
 
@@ -79,6 +79,7 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
     userConstraints: [],
     selfMemory: [],
     relationshipMemory: [],
+    recentReflections: [],
     projectOverlay: [],
   };
   let lastBrief: ContinuityBrief | undefined;
@@ -188,7 +189,7 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
         return;
       }
 
-      const recent = await mempalace.readRecentReflections(6, ctx.signal);
+      const recent = await mempalace.readRecentReflections(18, ctx.signal);
       if (isReflectionDuplicate(reflection, recent.entries.map((entry) => entry.text))) {
         lastAutoReflectionDecision = `${lastAutoReflectionDecision} · duplicate`;
         syncStatus(ctx);
@@ -215,7 +216,7 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
       const reflection = buildCompactReflection(event.branchEntries as Array<any>, project.projectName, lastBrief?.mode);
       if (!reflection || reflection === lastReflection) return;
       if (soul && reflectionAlreadyInSoul(reflection, soul.combinedText)) return;
-      const recent = await mempalace.readRecentReflections(6, ctx.signal);
+      const recent = await mempalace.readRecentReflections(18, ctx.signal);
       if (isReflectionDuplicate(reflection, recent.entries.map((entry) => entry.text))) return;
       const stored = await mempalace.writeReflection(reflection, ctx.signal);
       if (stored) lastReflection = reflection;
@@ -264,6 +265,7 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
         formatMemorySection("User constraints", memoryContext.userConstraints),
         formatMemorySection("Self memory", memoryContext.selfMemory),
         formatMemorySection("Relationship memory", memoryContext.relationshipMemory),
+        formatMemorySection("Recent soul reflections", memoryContext.recentReflections),
         formatMemorySection("Project overlay", memoryContext.projectOverlay),
       ];
       if (memoryContext.source) parts.unshift(`Source: ${memoryContext.source}`);
@@ -321,6 +323,62 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
     },
   });
 
+  pi.registerCommand("soul-reflections-cleanup", {
+    description: "Preview or delete noisy/duplicate soul reflections (usage: /soul-reflections-cleanup [count] [--delete])",
+    handler: async (args, ctx) => {
+      if (!soul) await refreshState(ctx);
+      mempalace.refresh(ctx.cwd);
+      const shouldDelete = /(^|\s)(--delete|-d)(\s|$)/.test(args);
+      const cleanedArgs = args.replace(/(^|\s)(--delete|-d)(\s|$)/g, " ").trim();
+      const requested = Number.parseInt(cleanedArgs, 10);
+      const count = Number.isFinite(requested) && requested > 0 ? Math.min(requested, 30) : 18;
+      const result = await mempalace.readRecentReflections(count, ctx.signal);
+
+      const keepers: string[] = [];
+      const actions = result.entries.map((entry) => {
+        const quality = classifyStoredReflection(entry.text);
+        const duplicate = quality !== "work-log" && isReflectionDuplicate(entry.text, keepers);
+        if (quality !== "work-log" && !duplicate) keepers.push(entry.text);
+        return {
+          entry,
+          quality,
+          duplicate,
+          deleteReason: quality === "work-log" ? "work-log/noise" : duplicate ? "duplicate" : undefined,
+        };
+      });
+
+      const deletable = actions.filter((action) => action.deleteReason && action.entry.id);
+      const missingIds = actions.filter((action) => action.deleteReason && !action.entry.id).length;
+      let deleted = 0;
+      if (shouldDelete) {
+        for (const action of deletable) {
+          await mempalace.deleteDrawer(action.entry.id!, ctx.signal);
+          deleted += 1;
+        }
+      }
+
+      const lines = actions.map((action, index) => {
+        const marker = action.deleteReason ? (action.entry.id ? "DELETE" : "WOULD DELETE (missing id)") : "keep";
+        const id = action.entry.id ? ` id=${action.entry.id}` : "";
+        return `${index + 1}. ${marker}${id} quality=${action.quality}${action.duplicate ? " duplicate=yes" : ""}${action.deleteReason ? ` reason=${action.deleteReason}` : ""}\n   ${truncate(action.entry.text, 260)}`;
+      });
+
+      const parts = [
+        `Mode: ${shouldDelete ? "delete" : "preview"}`,
+        `Connected: ${result.connected ? "yes" : "no"}`,
+        `Scanned: ${result.entries.length}`,
+        `Flagged: ${actions.filter((action) => action.deleteReason).length}`,
+        `Deleted: ${deleted}`,
+        `Missing ids for flagged entries: ${missingIds}`,
+        shouldDelete ? "Action complete." : "Preview only. Re-run with --delete to remove flagged entries that have ids.",
+        `Entries:\n${lines.length ? lines.join("\n") : "<none>"}`,
+      ];
+      if (result.source) parts.splice(2, 0, `Source: ${result.source}`);
+      if (result.error) parts.push(`Error: ${result.error}`);
+      showOutput(pi, "Soul reflections cleanup", parts.join("\n\n"));
+    },
+  });
+
   pi.registerCommand("soul-reload", {
     description: "Reload soul files and MemPalace connection state",
     handler: async (_args, ctx) => {
@@ -338,13 +396,24 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
         return;
       }
       mempalace.refresh(ctx.cwd);
+      const reflection = buildManualReflection(text);
+      if (!reflection) {
+        ctx.ui.notify("That does not look like a durable soul reflection. Use an identity/relationship/style lesson rather than a work log or transcript.", "error");
+        return;
+      }
+
       try {
-        const stored = await mempalace.writeReflection(text, ctx.signal);
+        const recent = await mempalace.readRecentReflections(18, ctx.signal);
+        if (isReflectionDuplicate(reflection, recent.entries.map((entry) => entry.text))) {
+          showOutput(pi, "Soul reflection skipped", `Duplicate of an existing reflection.\n\n${reflection}`);
+          return;
+        }
+        const stored = await mempalace.writeReflection(reflection, ctx.signal);
         if (!stored) {
           ctx.ui.notify("MemPalace is not available for soul reflections", "error");
           return;
         }
-        showOutput(pi, "Soul reflection stored", text);
+        showOutput(pi, "Soul reflection stored", reflection);
       } catch (error) {
         ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
       }
@@ -369,7 +438,7 @@ export default function organicPersonaExtension(pi: ExtensionAPI) {
       const alreadyInSoul = reflection ? reflectionAlreadyInSoul(reflection, soul.combinedText) : false;
 
       mempalace.refresh(ctx.cwd);
-      const recent = await mempalace.readRecentReflections(6, ctx.signal);
+      const recent = await mempalace.readRecentReflections(18, ctx.signal);
       const duplicate = reflection ? isReflectionDuplicate(reflection, recent.entries.map((entry) => entry.text)) : false;
       const wouldStore = Boolean(reflection) && !alreadyInSoul && !duplicate && reflection !== lastReflection;
 

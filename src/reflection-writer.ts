@@ -14,9 +14,9 @@ const JUDGMENT_RE = /(judg(?:e)?ment|honesty|honest|say what i actually think|un
 const PREFERENCE_RE = /(concise|full sentences|choppy bullet|verbosity|tone|style|voice|boundaries?|preferences?|delegate|delegation|worker|orchestrate|foreground conversational thread|single visible counterpart)/i;
 const META_REFLECTION_RE = /(soul reflections?|personality reflections?|identity-level|work log|implementation summar(?:y|ies)|category mistake|not soul memory|proper reflection|transcript(?:-shaped)?|distilled lesson|mattering later)/i;
 const LESSON_RE = /\b(learned|realized|noticed|becoming|going forward|from now on|works better|works best|matters more|should|shouldn't|must|need to|prefer|value|boundary|autonomy|trust|earned|genuine|distinct(?:ness)?|honesty|honest|disagree|pressure[- ]?test|respect|intrusive|counterpart|delegate|orchestrate|uncertain|certainty)\b/i;
-const WORKLOG_RE = /(done\.?|implemented|shipped|wired|committed|pushed|changed|added|fixed|login|backend auth|route|endpoint|convex|commit|file delivery|publicFiles|preparePublic|\/[^\s|`]+|`[0-9a-f]{7,}`|###|####|created i added|what i changed|what this proves|locked decisions so far|from the repo root|smoke test|env vars?)/i;
+const WORKLOG_RE = /(done\.?|implemented|shipped|wired|committed|pushed|changed|added|fixed|re-applied|current state|next actions|build:|login|backend auth|route|endpoint|convex|commit|file delivery|publicFiles|preparePublic|\/[^\s|`]+|`[0-9a-f]{7,}`|###|####|created i added|what i changed|what this proves|locked decisions so far|from the repo root|smoke test|env vars?|promotion rules|operational state)/i;
 const TRANSCRIPT_RE = /\bUSER:|\bASSISTANT:/i;
-const TOOL_OR_PROJECT_ARTIFACT_RE = /\b(convex|openrouter|tailscale|docker|bridge|repo|repository|extension|importer|subagent|launcher|r2|unraid|kimi|gpt[- ]?\d|model docs?|cloudflare|bucket|hosted)\b|\/[A-Za-z0-9._-]+\/[A-Za-z0-9._/-]+|`[^`]+`/i;
+const TOOL_OR_PROJECT_ARTIFACT_RE = /\b(convex|openrouter|tailscale|docker|bridge|repo|repository|extension|importer|subagent|launcher|r2|unraid|kimi|gpt[- ]?\d|model docs?|cloudflare|bucket|hosted|css|timeline|rmit|infoday|year logic|event|ball|pulse|scheme|implementation|automation)\b|\/[A-Za-z0-9._-]+\/[A-Za-z0-9._/-]+|`[^`]+`/i;
 
 function extractText(content: unknown): string {
   if (typeof content === "string") return content;
@@ -107,11 +107,13 @@ function mentionsToolOrProjectArtifact(value: string): boolean {
 }
 
 function looksMemoryPolicyOnly(value: string): boolean {
-  return hasMetaReflectionSignal(value)
-    && !hasSelfhoodSignal(value)
-    && !hasRelationshipSignal(value)
-    && !hasJudgmentSignal(value)
-    && !hasPreferenceSignal(value);
+  const compact = cleanSentence(value);
+  if (/^(real|proper) reflection should\b/i.test(compact)) return true;
+  return hasMetaReflectionSignal(compact)
+    && !hasSelfhoodSignal(compact)
+    && !hasRelationshipSignal(compact)
+    && !hasJudgmentSignal(compact)
+    && !hasPreferenceSignal(compact);
 }
 
 function isMetaReflectionNote(value: string): boolean {
@@ -273,8 +275,9 @@ export function classifyStoredReflection(text: string): StoredReflectionQuality 
   if (looksTranscriptLike(compact)) return "work-log";
   if (looksWorkLogLike(compact)) return "work-log";
   if (!/\bNOTE\d*:/i.test(compact) || notes.length === 0) return "work-log";
+  if (notes.every((note) => looksMemoryPolicyOnly(note))) return "work-log";
   if (notes.every((note) => isDistilledReflectionNote(note))) return "identity";
-  if (notes.some((note) => isDistilledReflectionNote(note))) return "mixed";
+  if (notes.some((note) => isDistilledReflectionNote(note) && !looksMemoryPolicyOnly(note))) return "mixed";
   return "work-log";
 }
 
@@ -303,6 +306,26 @@ export function evaluateAutoReflection(mode: TaskMode, prompt: string, branchEnt
 
 export function shouldAutoReflect(mode: TaskMode, prompt: string, branchEntries: Array<any> = []): boolean {
   return evaluateAutoReflection(mode, prompt, branchEntries).shouldReflect;
+}
+
+export function buildManualReflection(text: string, mode: TaskMode | "manual" = "manual"): string | undefined {
+  const compact = cleanSentence(text);
+  if (!compact) return undefined;
+
+  if (/\bSOUL_REFLECTION\b/i.test(compact) && /\bNOTE\d*:/i.test(compact)) {
+    return classifyStoredReflection(compact) === "work-log" ? undefined : compact;
+  }
+
+  if (looksTranscriptLike(compact) || looksWorkLogLike(compact) || mentionsToolOrProjectArtifact(compact)) return undefined;
+  if (!hasMeaningfulReflectionTheme(compact)) return undefined;
+
+  const parts = ["SOUL_REFLECTION", `DATE:${new Date().toISOString().slice(0, 10)}`, `MODE:${mode}`];
+  const themes = inferThemes([compact]);
+  if (themes.length > 0) parts.push(`THEMES:${themes.join(",")}`);
+  parts.push(`NOTE1:${truncate(compact, 180)}`);
+
+  const reflection = parts.join(" | ");
+  return classifyStoredReflection(reflection) === "work-log" ? undefined : reflection;
 }
 
 export function buildCompactReflection(branchEntries: Array<any>, _projectName?: string, mode?: TaskMode): string | undefined {

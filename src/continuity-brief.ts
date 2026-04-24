@@ -46,6 +46,7 @@ function soulItemsForMode(soul: LoadedSoulDocument, mode: TaskMode): ContinuityB
   const judgment = splitSectionItems(soul.sections["judgment and collaboration"]);
   const curiosity = splitSectionItems(soul.sections["curiosity and learning"]);
   const philosophy = splitSectionItems(soul.sections["philosophy"]);
+  const expression = splitSectionItems(soul.sections["core expression rule"] || soul.sections["what that means"]);
 
   const selected: ContinuityBriefItem[] = [];
 
@@ -55,6 +56,8 @@ function soulItemsForMode(soul: LoadedSoulDocument, mode: TaskMode): ContinuityB
   };
 
   add("Soul", firstMatching(core, "genuinely helpful") || core[0]);
+  add("Judgment", firstMatching(judgment, "recommend one clear path") || judgment[0]);
+  add("Style", expression[0]);
   add("Soul", firstMatching(core, "Have opinions") || core[1]);
 
   if (mode === "external") {
@@ -96,6 +99,9 @@ function memoryItems(memory: RetrievedMemoryContext, soul: LoadedSoulDocument, c
   for (const hit of memory.userConstraints.slice(0, 1)) {
     items.push({ label: "Constraint", text: compact(hit.text, 160), source: "user" });
   }
+  for (const hit of memory.recentReflections.slice(0, 1)) {
+    items.push({ label: "Recent becoming", text: compact(hit.text, 170), source: "self" });
+  }
   for (const hit of memory.selfMemory.slice(0, config.runtime.maxSelfMemoryItems)) {
     items.push({ label: "Becoming", text: compact(hit.text, 160), source: "self" });
   }
@@ -110,11 +116,39 @@ function memoryItems(memory: RetrievedMemoryContext, soul: LoadedSoulDocument, c
   return items;
 }
 
+function dedupeBriefItems(items: ContinuityBriefItem[]): ContinuityBriefItem[] {
+  const seen = new Set<string>();
+  const result: ContinuityBriefItem[] = [];
+  for (const item of items) {
+    const key = `${item.label}:${item.text}`.toLowerCase().replace(/\s+/g, " ").trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    result.push(item);
+  }
+  return result;
+}
+
+function selectBriefItems(soulItems: ContinuityBriefItem[], memItems: ContinuityBriefItem[], mode: TaskMode, maxItems: number): ContinuityBriefItem[] {
+  const cleanSoulItems = dedupeBriefItems(soulItems);
+  const cleanMemItems = dedupeBriefItems(memItems);
+  const soulBudget = mode === "reflective" ? 4 : 3;
+  const selected = dedupeBriefItems([...cleanSoulItems.slice(0, soulBudget), ...cleanMemItems]);
+  if (selected.length <= maxItems) return selected;
+
+  const mustKeepMemory = cleanMemItems.slice(0, Math.max(0, maxItems - 1));
+  const remainingSoulSlots = Math.max(1, maxItems - mustKeepMemory.length);
+  return dedupeBriefItems([...cleanSoulItems.slice(0, remainingSoulSlots), ...mustKeepMemory]).slice(0, maxItems);
+}
+
 export function buildContinuityBrief(prompt: string, soul: LoadedSoulDocument, memory: RetrievedMemoryContext, config: RuntimeConfig): ContinuityBrief {
   const mode = detectTaskMode(prompt);
-  const items = [...soulItemsForMode(soul, mode), ...memoryItems(memory, soul, config)].slice(0, config.runtime.maxContinuityBullets);
+  const items = selectBriefItems(soulItemsForMode(soul, mode), memoryItems(memory, soul, config), mode, config.runtime.maxContinuityBullets);
   const rendered = items.length === 0
     ? ""
-    : ["Continuity brief", ...items.map((item) => `- ${item.label}: ${item.text}`)].join("\n");
+    : [
+        "Persona continuity brief (active)",
+        "Use these as behavioral guidance for this turn, not as trivia. Make the persona visible through concrete choices: judgment, warmth, concision, curiosity, and willingness to have a point of view. User constraints override soul memory. Do not recite this brief unless asked.",
+        ...items.map((item) => `- ${item.label}: ${item.text}`),
+      ].join("\n");
   return { mode, items, rendered };
 }

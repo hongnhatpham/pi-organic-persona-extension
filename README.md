@@ -126,6 +126,7 @@ The repo now includes a first runtime scaffold that can:
   - `/soul-config`
   - `/soul-memory [query]`
   - `/soul-reflections [count]`
+  - `/soul-reflections-cleanup [count] [--delete]`
   - `/soul-reload`
   - `/soul-reflect <text>`
 
@@ -174,6 +175,10 @@ The scaffold reads the same personal-memory config locations as the existing Mem
 
 It expects a reachable MemPalace MCP bridge if reflective write-back and retrieval are to work.
 
+Runtime retrieval is intentionally narrow: user preferences come from `wing_user/preferences`, selfhood and relationship continuity are pulled from the agent diary's `SOUL_REFLECTION` entries, recent good-quality reflections are given a visible slot in the continuity brief, and fuzzy duplicate/noise filters suppress repeated or work-log-like memories. The injected brief is framed as active behavioral guidance, so memory should change judgment, warmth, concision, and point-of-view rather than merely appearing in debug output.
+
+Use `/soul-reflections-cleanup` first as a preview. Add `--delete` only after reviewing the flagged entries; deletion requires drawer ids from the bridge/local mirror. Manual `/soul-reflect` entries are normalized into the same compact `SOUL_REFLECTION | NOTE...` shape and checked against a wider recent-memory window before write-back.
+
 ## Runtime config
 
 The scaffold now reads runtime defaults from:
@@ -194,7 +199,7 @@ Current tunables include:
 
 Useful next implementation steps:
 
-- improve retrieval taxonomy and scoring for soul-core vs relationship vs project overlays
+- improve retrieval taxonomy and scoring beyond the current soul-reflection/user-preference/project split
 - eventually support branch-local divergence and reconciliation
 - add richer soul-specific inspection of how retrieved memory affected the final brief
 - experiment with reconciliation between stable soul text and newly reinforced reflective patterns
